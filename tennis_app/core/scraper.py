@@ -24,6 +24,10 @@ REQUEST_DELAY_MIN = 5.0
 REQUEST_DELAY_MAX = 8.0
 REQUEST_RETRIES = 3
 
+
+class TennisAbstractAccessError(RuntimeError):
+    """Raised when TennisAbstract rejects access from the current network."""
+
 # Column mapping from the JS array indices to field names
 # (based on tennisabstract's matchmx array structure)
 MATCH_COLUMNS = {
@@ -124,6 +128,17 @@ class TennisAbstractScraper:
                     logger.warning("Rate limited (attempt %d), waiting %ds... "
                                    "(delay multiplier now %.1f)",
                                    attempt + 1, wait, self._delay_multiplier)
+                    time.sleep(wait)
+                    continue
+                if resp.status_code in (401, 403):
+                    wait = 10
+                    logger.warning(
+                        "Access denied by TennisAbstract (%s, attempt %d/%d) "
+                        "for %s",
+                        resp.status_code, attempt + 1, REQUEST_RETRIES, url)
+                    if attempt == REQUEST_RETRIES - 1:
+                        raise TennisAbstractAccessError(
+                            f"TennisAbstract returned {resp.status_code} for {url}")
                     time.sleep(wait)
                     continue
                 if resp.status_code == 404:
@@ -255,6 +270,8 @@ class TennisAbstractScraper:
                 except Exception as exc:
                     logger.warning("HTML fetch failed for %s (attempt %d/2): %s",
                                    url_name, attempt, exc)
+                    if isinstance(exc, TennisAbstractAccessError):
+                        raise
                 if attempt == 1:
                     # Short backoff between HTML retries.
                     time.sleep(random.uniform(2.0, 4.0))
@@ -284,6 +301,8 @@ class TennisAbstractScraper:
                 except Exception as exc:
                     logger.warning("Could not get JS matches from %s: %s",
                                    js_url, exc)
+                    if isinstance(exc, TennisAbstractAccessError):
+                        raise
             return []
 
         for url_name in url_variants:
@@ -304,6 +323,8 @@ class TennisAbstractScraper:
         # "Han-na Chang" \u2192 "Hanna Chang").
         try:
             resolved = self._resolve_via_playerlist(player_name, tour=tour)
+        except TennisAbstractAccessError:
+            raise
         except Exception as exc:
             logger.warning("Playerlist fallback failed for %s: %s",
                            player_name, exc)
@@ -328,6 +349,8 @@ class TennisAbstractScraper:
                     logger.warning(
                         "Resolved HTML fetch failed for %s: %s",
                         resolved_url, exc)
+                    if isinstance(exc, TennisAbstractAccessError):
+                        raise
                 # JS fallback for the resolved name too
                 for js_url in (
                     f"{BASE_URL}/jsmatches/{resolved_url}.js",
@@ -346,6 +369,8 @@ class TennisAbstractScraper:
                     except Exception as exc:
                         logger.warning("Could not get JS matches from %s: %s",
                                        js_url, exc)
+                        if isinstance(exc, TennisAbstractAccessError):
+                            raise
 
         logger.warning("No matches found for %s", player_name)
         return None
@@ -805,6 +830,8 @@ class TennisAbstractScraper:
                         lkey = self._de_loose_key(norm)
                         if lkey and lkey not in loose:
                             loose[lkey] = cleaned
+        except TennisAbstractAccessError:
+            raise
         except Exception as exc:
             logger.warning("Could not load %s playerlist: %s", tour, exc)
         index["__loose__"] = loose

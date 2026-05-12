@@ -55,13 +55,15 @@ def _log_tour_report(tour, match_report, extended_report=None):
     )
     logger.info(
         "matches attempted=%s confirmed=%s ta_lag=%s not_found=%s "
-        "empty=%s errors=%s fetched_rows=%s imported_rows=%s",
+        "empty=%s errors=%s access_blocked=%s fetched_rows=%s "
+        "imported_rows=%s",
         match_report.get("attempted", 0),
         match_report.get("confirmed", 0),
         match_report.get("ta_lag", 0),
         match_report.get("not_found", 0),
         match_report.get("empty", 0),
         match_report.get("errors", 0),
+        match_report.get("access_blocked", 0),
         match_report.get("rows", 0),
         match_report.get("imported_rows", 0),
     )
@@ -142,6 +144,8 @@ def main(argv=None) -> int:
                         help="Live match provider for this lab copy")
     parser.add_argument("--monday-boost", action="store_true",
                         help="(legacy, no-op — top is already full)")
+    parser.add_argument("--purge-empty-scrape-cache", action="store_true",
+                        help="Delete zero-row negative scrape-cache entries")
     parser.add_argument("--seed-players-only", action="store_true",
                         help="Only seed the players table, then exit")
     args = parser.parse_args(argv)
@@ -172,6 +176,15 @@ def main(argv=None) -> int:
     try:
         # Seed the players table on first run so name resolution works.
         _seed_players_if_empty(db)
+        if args.purge_empty_scrape_cache:
+            logger.info("Purging empty negative scrape-cache rows...")
+            db.conn.execute(
+                "DELETE FROM scrape_cache "
+                "WHERE match_count = 0 "
+                "AND (last_match_date IS NULL OR last_match_date = '') "
+                "AND (match_signature IS NULL OR match_signature = '')")
+            db.conn.commit()
+            logger.info("Empty scrape-cache purge complete")
         if args.seed_players_only:
             logger.info("Seed-only mode: done.")
             return 0
@@ -207,6 +220,19 @@ def main(argv=None) -> int:
                 "scraped_names": scraped_names,
                 "match_report": match_report,
             }
+
+        blocked = sum(
+            int((payload.get("match_report") or {}).get("access_blocked", 0))
+            for payload in tour_payloads.values()
+        )
+        if blocked:
+            for tour in ("atp", "wta"):
+                payload = tour_payloads.get(tour, {})
+                _log_tour_report(tour, payload.get("match_report", {}), None)
+            logger.error(
+                "Cloud scrape blocked by match provider (%d access-denied "
+                "failures); leaving scrape fingerprints unchanged", blocked)
+            return 1
 
         if not args.no_extended:
             for tour in ("atp", "wta"):

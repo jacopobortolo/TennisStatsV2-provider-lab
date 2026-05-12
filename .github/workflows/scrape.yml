@@ -30,6 +30,10 @@ on:
         description: 'Drop scraped matches before this year'
         required: false
         default: '2025'
+      purge_empty_scrape_cache:
+        description: 'Purge zero-row negative scrape-cache rows before running'
+        required: false
+        default: 'false'
 
 # Only one scrape at a time — newer runs cancel older queued ones.
 concurrency:
@@ -79,6 +83,9 @@ jobs:
           EXTRA=""
           if [ "${{ github.event.inputs.skip_extended }}" = "true" ]; then
             EXTRA="--no-extended"
+          fi
+          if [ "${{ github.event.inputs.purge_empty_scrape_cache }}" = "true" ]; then
+            EXTRA="$EXTRA --purge-empty-scrape-cache"
           fi
           python -m cloud.scrape_job \
             --top "$TOP_N" \

@@ -18,6 +18,7 @@ import requests
 import pandas as pd
 
 from .scraper import (
+    TennisAbstractAccessError,
     TennisAbstractScraper,
     clean_player_name,
 )
@@ -837,6 +838,7 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
         "not_found": 0,
         "empty": 0,
         "errors": 0,
+        "access_blocked": 0,
         "rows": 0,
         "confirmed_players": [],
     }
@@ -1078,6 +1080,8 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
                 if exc is not None:
                     logger.warning("Failed to scrape %s: %s", name, exc)
                     report["errors"] += 1
+                    if isinstance(exc, TennisAbstractAccessError):
+                        report["access_blocked"] += 1
                     continue
                 report["attempted"] += 1
 
