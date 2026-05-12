@@ -83,6 +83,27 @@ Edit the `cron` line in `.github/workflows/scrape.yml`:
 - cron: '7 9 * * *'     # once a day
 ```
 
+## Local SofaScore automation
+
+SofaScore may block GitHub-hosted runner IPs. For that provider, run the
+hybrid scrape from a local Windows machine and write the results to Turso:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install_sofascore_task.ps1
+```
+
+The task runs `run_sofascore_cloud_once.bat` when Windows starts and when the
+Windows user logs in. That batch starts the local SofaScore proxy if needed,
+then runs:
+
+```powershell
+python -m cloud.scrape_job --top 1000 --no-extended --min-year 2026 --match-provider hybrid --max-matches-per-player 3
+```
+
+Logs are written to `%USERPROFILE%\.tennis_analytics\logs`. The desktop app
+also has a **SofaScore Sync** button that runs the same batch and then syncs
+Turso back into the local SQLite database.
+
 ---
 
 ## Files

@@ -134,6 +134,8 @@ def main(argv=None) -> int:
                         help="Max inactive time-based extended refreshes per tour/run")
     parser.add_argument("--max-workers", type=int, default=8,
                         help="Max parallel match-provider fetches")
+    parser.add_argument("--max-matches-per-player", type=int, default=20,
+                        help="Max recent matches to fetch/import per player")
     parser.add_argument("--min-year", type=int, default=2025)
     parser.add_argument("--match-provider", default=None,
                         choices=["tennisabstract", "sofascore", "hybrid"],
@@ -158,9 +160,11 @@ def main(argv=None) -> int:
     top_n = args.top
     logger.info(
         "Cloud scrape: top_n=%d per tour, extended_budget=%d, "
-        "inactive_extended_budget=%d, max_workers=%d, match_provider=%s",
+        "inactive_extended_budget=%d, max_workers=%d, "
+        "max_matches_per_player=%d, match_provider=%s",
         top_n, args.extended_budget, args.inactive_extended_budget,
-        args.max_workers, args.match_provider or "env/default",
+        args.max_workers, args.max_matches_per_player,
+        args.match_provider or "env/default",
     )
 
     db = RemoteTennisDatabase()
@@ -184,6 +188,7 @@ def main(argv=None) -> int:
                 db=db,
                 cache_expire_hours=24,
                 min_year=args.min_year,
+                max_matches_per_player=args.max_matches_per_player,
                 max_workers=args.max_workers,
                 match_provider=args.match_provider,
                 return_report=True,

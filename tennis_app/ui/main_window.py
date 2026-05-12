@@ -3,8 +3,10 @@ Main window — sidebar navigation + stacked pages + background workers.
 """
 
 import logging
+import subprocess
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -150,6 +152,13 @@ class MainWindow(QMainWindow):
         self.scrape_btn.setObjectName("accentBtn")
         self.scrape_btn.clicked.connect(self._scrape_live_data)
         bar_layout.addWidget(self.scrape_btn)
+
+        self.sofascore_btn = QPushButton("SofaScore Sync")
+        self.sofascore_btn.setObjectName("accentBtn")
+        self.sofascore_btn.setToolTip(
+            "Run the local SofaScore hybrid scrape to Turso, then sync it here.")
+        self.sofascore_btn.clicked.connect(self._scrape_sofascore_cloud_data)
+        bar_layout.addWidget(self.sofascore_btn)
 
         # Manual extended-stats refresh (cloud handles this hourly;
         # this button forces a local re-scrape on demand).
@@ -427,6 +436,7 @@ class MainWindow(QMainWindow):
 
     def _scrape_live_data(self):
         self.scrape_btn.setEnabled(False)
+        self.sofascore_btn.setEnabled(False)
         self.refresh_btn.setEnabled(False)
         # If a manual extended-stats scrape is running, pause it so it
         # doesn't fight the live scraper for the SQLite write lock.
@@ -472,6 +482,7 @@ class MainWindow(QMainWindow):
 
     def _on_scrape_done(self, success, error_msg):
         self.scrape_btn.setEnabled(True)
+        self.sofascore_btn.setEnabled(True)
         self.refresh_btn.setEnabled(True)
         self.progress_bar.setValue(0)
         if success:
@@ -488,6 +499,60 @@ class MainWindow(QMainWindow):
         # They are kept in sync via the cloud workflow (hourly) and
         # merged into the local DB at app startup. Use the "Refresh
         # Extended Stats" button if you need a manual local re-scrape.
+
+    def _scrape_sofascore_cloud_data(self):
+        self.sofascore_btn.setEnabled(False)
+        self.scrape_btn.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
+        self.ext_btn.setEnabled(False)
+        self._ext_stop_event.set()
+        if self._ext_worker and self._ext_worker.isRunning():
+            self._ext_worker.quit()
+            self._ext_worker.wait(5000)
+        self._ext_worker = None
+        worker = DataWorker(self._sofascore_cloud_task, self)
+        worker.progress.connect(self._on_progress)
+        worker.finished.connect(self._on_sofascore_cloud_done)
+        self._worker = worker
+        worker.start()
+
+    def _sofascore_cloud_task(self, progress_cb):
+        if not self.db:
+            self.db = TennisDatabase()
+        repo = Path(__file__).resolve().parents[2]
+        batch = repo / "run_sofascore_cloud_once.bat"
+        if not batch.exists():
+            raise FileNotFoundError(f"Missing {batch}")
+
+        progress_cb(0, 100, "Running SofaScore cloud scrape...")
+        subprocess.run(
+            ["cmd.exe", "/c", str(batch)],
+            cwd=str(repo),
+            check=True,
+        )
+
+        progress_cb(90, 100, "Syncing Turso data locally...")
+        from cloud.sync import sync_cloud_to_local
+        sync_cloud_to_local(
+            local_db_path=self.db.db_path,
+            progress_callback=lambda table, rows: progress_cb(
+                90, 100, f"Syncing {table} ({rows} rows)..."),
+        )
+
+    def _on_sofascore_cloud_done(self, success, error_msg):
+        self.sofascore_btn.setEnabled(True)
+        self.scrape_btn.setEnabled(True)
+        self.refresh_btn.setEnabled(True)
+        self.ext_btn.setEnabled(True)
+        self.progress_bar.setValue(0)
+        if success:
+            self.status_label.setText("SofaScore cloud sync complete")
+            if self.db:
+                self.db.invalidate_player_cache()
+            self._rebuild_pages()
+        else:
+            QMessageBox.critical(
+                self, "Error", f"SofaScore sync failed:\n{error_msg}")
 
     def _rebuild_pages(self):
         """Destroy and recreate all pages to reflect new data."""

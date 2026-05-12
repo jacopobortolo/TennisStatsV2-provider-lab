@@ -157,6 +157,7 @@ class TennisDatabase:
                 draw_size INTEGER,
                 tourney_level TEXT,
                 tourney_date TEXT,
+                source_match_date TEXT,
                 match_num INTEGER,
                 winner_id TEXT,
                 winner_seed TEXT,
@@ -502,6 +503,10 @@ class TennisDatabase:
         try:
             cur.execute(
                 "ALTER TABLE matches ADD COLUMN is_upcoming INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            cur.execute("ALTER TABLE matches ADD COLUMN source_match_date TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
         try:
@@ -3477,14 +3482,18 @@ class TennisDatabase:
                     year = str(etd)[:4] if etd else ""
                     last = opp.rsplit(" ", 1)[-1] if opp and " " in opp else (opp or "")
                     candidates = lookup.get((year, last), [])
+                    etn_norm = str(etn or "").lower()
                     surf = lvl = None
                     for mtn, ms, ml in candidates:
-                        if etn and etn in mtn:
+                        mtn_norm = str(mtn or "").lower()
+                        if etn_norm and etn_norm in mtn_norm:
                             surf, lvl = ms, ml
                             break
                     if surf is None:
                         for mtn, ms, ml in candidates:
-                            if etn and mtn and (etn in mtn or mtn in etn):
+                            mtn_norm = str(mtn or "").lower()
+                            if etn_norm and mtn_norm and (
+                                    etn_norm in mtn_norm or mtn_norm in etn_norm):
                                 surf, lvl = ms, ml
                                 break
                     if surf or lvl:
@@ -3535,17 +3544,22 @@ class TennisDatabase:
             updates = []
             for rid, etn, etd, opp in rows:
                 year = str(etd)[:4] if etd else ""
-                candidates = lookup.get((year, opp), [])
+                last = opp.rsplit(" ", 1)[-1] if opp and " " in opp else (opp or "")
+                candidates = lookup.get((year, last), [])
+                etn_norm = str(etn or "").lower()
                 surf = None
                 lvl = None
                 for mtn, ms, ml in candidates:
-                    if etn and etn in mtn:
+                    mtn_norm = str(mtn or "").lower()
+                    if etn_norm and etn_norm in mtn_norm:
                         surf, lvl = ms, ml
                         break
                 if surf is None:
                     # Fallback: try partial match
                     for mtn, ms, ml in candidates:
-                        if etn and mtn and (etn in mtn or mtn in etn):
+                        mtn_norm = str(mtn or "").lower()
+                        if etn_norm and mtn_norm and (
+                                etn_norm in mtn_norm or mtn_norm in etn_norm):
                             surf, lvl = ms, ml
                             break
                 if surf or lvl:

@@ -294,6 +294,7 @@ class SofaScoreMatchProvider(MatchProvider):
             "draw_size": None,
             "tourney_level": self._level_from_event(event, tour=tour),
             "tourney_date": date_text,
+            "source_match_date": date_text,
             "match_num": None,
             "winner_id": "",
             "winner_seed": self._seed_from_team(winner),

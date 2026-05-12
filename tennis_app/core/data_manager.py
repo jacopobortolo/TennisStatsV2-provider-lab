@@ -310,6 +310,48 @@ def _build_match_signature(df):
     return hashlib.sha1(payload.encode("utf-8", "ignore")).hexdigest()
 
 
+def _ranking_lookup(rankings):
+    """Build normalized name -> current ranking metadata."""
+    lookup = {}
+    for entry in rankings or []:
+        name = entry.get("name")
+        if not name:
+            continue
+        lookup[_normalize_name(name)] = {
+            "rank": entry.get("rank"),
+            "points": entry.get("points"),
+        }
+    return lookup
+
+
+def _fill_current_ranks(df, ranking_lookup):
+    """Fill missing match ranks from the current top-N ranking snapshot."""
+    if df is None or df.empty or not ranking_lookup:
+        return df
+    df = df.copy()
+    for side in ("winner", "loser"):
+        name_col = f"{side}_name"
+        rank_col = f"{side}_rank"
+        points_col = f"{side}_rank_points"
+        if name_col not in df.columns:
+            continue
+        if rank_col not in df.columns:
+            df[rank_col] = None
+        if points_col not in df.columns:
+            df[points_col] = None
+        for idx, name in df[name_col].items():
+            meta = ranking_lookup.get(_normalize_name(str(name or "")))
+            if not meta:
+                continue
+            rank = meta.get("rank")
+            points = meta.get("points")
+            if rank is not None and pd.isna(df.at[idx, rank_col]):
+                df.at[idx, rank_col] = rank
+            if points is not None and pd.isna(df.at[idx, points_col]):
+                df.at[idx, points_col] = points
+    return df
+
+
 def scrape_player_matches(player_name, min_year=None, tour="atp",
                           max_matches=None, match_provider=None):
     """
@@ -777,7 +819,6 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
         "sf": "sofascore",
         "sofa": "sofascore",
     }.get(selected_match_provider, selected_match_provider)
-    fast_provider_refresh = selected_match_provider in {"sofascore", "hybrid"}
 
     report = {
         "tour": tour,
@@ -835,6 +876,7 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
 
     player_names = [e["name"] for e in rankings]
     rank_by_name = {e["name"]: e.get("rank") for e in rankings}
+    current_rank_lookup = _ranking_lookup(rankings)
     logger.info("Selected %d players for scraping (ranks %s\u2013%s: %s \u2026 %s, source=%s)",
                 len(rankings),
                 rankings[0].get("rank") if rankings else "?",
@@ -930,11 +972,6 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
                         "due_upcoming" if has_due_upcoming else "time")
                     fingerprints[name] = fp
             else:
-                if fast_provider_refresh:
-                    stale.add(name)
-                    stale_reasons[name] = "fast_provider_refresh"
-                    fingerprints[name] = fp
-                    continue
                 activity_changed, status = _official_activity_status(
                     cache_row[1] if cache_row else None, fp)
                 report["activity_statuses"][status] = (
@@ -1018,6 +1055,9 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
                 name, min_year=min_year, tour=tour,
                 max_matches=max_matches_per_player,
                 match_provider=match_provider)
+            if selected_match_provider in {"sofascore", "hybrid"}:
+                df = _fill_current_ranks(df, current_rank_lookup)
+                match_signature = _build_match_signature(df)
             return name, df, last_match_date, match_signature, None
         except Exception as exc:
             return name, None, None, None, exc
@@ -1070,7 +1110,9 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
                 if (needs_confirmed_activity and had_cache
                         and (not cache_row or len(cache_row) < 4
                              or not cache_row[3])):
-                    baseline_signature = _db_match_signature(db, cache_key, tour)
+                    baseline_signature = _db_match_signature(
+                        db, cache_key, tour,
+                        limit=max_matches_per_player or 20)
                 compare_row = cache_row
                 if baseline_signature:
                     compare_row = (
