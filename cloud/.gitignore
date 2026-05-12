@@ -1,0 +1,6 @@
+# Cloud build artefacts — never commit secrets or local replicas.
+.env
+replica.db
+replica.db-*
+*.db-shm
+*.db-wal

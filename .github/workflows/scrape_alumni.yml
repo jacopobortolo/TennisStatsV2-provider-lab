@@ -1,0 +1,81 @@
+name: Backfill Top-N Alumni Extended Stats
+
+# Manual one-shot job: scrape extended stats for every player who was ever
+# ranked in the top-N of either tour and write directly to Turso.
+# Use this to seed historical players (Federer, Sharapova, etc.) whose
+# data the regular live scrape does not refresh.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_rank:
+        description: 'Include players whose best DB rank is <= N'
+        required: false
+        default: '20'
+      sleep:
+        description: 'Seconds between players (politeness)'
+        required: false
+        default: '2.0'
+      force:
+        description: 'Re-scrape even if cache is fresh'
+        required: false
+        default: 'false'
+      limit:
+        description: 'Stop after N players per tour (0 = no limit)'
+        required: false
+        default: '0'
+
+concurrency:
+  group: tennis-alumni-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        tour: [atp, wta]
+
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN:   ${{ secrets.TURSO_AUTH_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cloud.txt
+
+      - name: Validate Turso secrets
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ] || [ -z "$TURSO_AUTH_TOKEN" ]; then
+            echo "::error::TURSO_DATABASE_URL and TURSO_AUTH_TOKEN secrets must be set"
+            exit 1
+          fi
+
+      - name: Run alumni backfill (${{ matrix.tour }})
+        run: |
+          EXTRA=""
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            EXTRA="--force"
+          fi
+          python -m tennis_app.scripts.scrape_extended_top_alumni \
+            --cloud \
+            --tours "${{ matrix.tour }}" \
+            --max-rank "${{ github.event.inputs.max_rank || '20' }}" \
+            --sleep "${{ github.event.inputs.sleep || '2.0' }}" \
+            --limit "${{ github.event.inputs.limit || '0' }}" \
+            --players-file tennis_app/scripts/data/alumni_top20.txt \
+            $EXTRA

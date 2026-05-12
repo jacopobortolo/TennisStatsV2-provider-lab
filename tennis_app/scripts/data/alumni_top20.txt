@@ -1,0 +1,805 @@
+# alumni top-20: player_id|full_name|tour
+104076|Jose Acasuso|atp
+101736|Andre Agassi|atp
+100809|Juan Aguilera|atp
+105138|Roberto Bautista Agut|atp
+207989|Carlos Alcaraz|atp
+100244|John Alexander|atp
+200000|Felix Auger Aliassime|atp
+104597|Nicolas Almagro|atp
+100339|Victor Amaya|atp
+208029|Nel Ben Ami|atp
+100321|Vijay Amritraj|atp
+104339|Mario Ancic|atp
+104731|Kevin Anderson|atp
+104214|Igor Andreev|atp
+100901|Paul Annacone|atp
+101061|Jimmy Arias|atp
+100074|Arthur Ashe|atp
+101962|Younes El Aynaoui|atp
+202104|Sebastian Baez|atp
+104571|Marcos Baghdatis|atp
+100297|Corrado Barazzutti|atp
+105932|Nikoloz Basilashvili|atp
+101414|Boris Becker|atp
+102238|Alberto Berasategui|atp
+104607|Tomas Berdych|atp
+101309|Jay Berger|atp
+209950|Francesca Bernardi|atp
+126610|Matteo Berrettini|atp
+100249|Paolo Bertolucci|atp
+102035|Jonas Bjorkman|atp
+103484|James Blake|atp
+101589|Arnaud Boetsch|atp
+100437|Bjorn Borg|atp
+100186|Jeff Borowiak|atp
+200473|Beverly Bowes|atp
+207925|Brittany Brown|atp
+101843|Sergi Bruguera|atp
+122330|Alexander Bublik|atp
+105807|Pablo Carreno Busta|atp
+102860|Agustin Calleri|atp
+101481|Omar Camporese|atp
+103084|Guillermo Canas|atp
+101426|Kent Carlsson|atp
+101138|Pat Cash|atp
+107888|Olivier Cayla|atp
+106065|Marco Cecchinato|atp
+202103|Francisco Cerundolo|atp
+102021|Michael Chang|atp
+103428|Juan Ignacio Chela|atp
+101772|Andrei Cherkasov|atp
+101230|Andrei Chesnokov|atp
+111202|Hyeon Chung|atp
+105227|Marin Cilic|atp
+101532|Francisco Clavet|atp
+103096|Arnaud Clement|atp
+100555|Jose Luis Clerc|atp
+207925|Flavio Cobolli|atp
+100284|Jimmy Connors|atp
+103909|Guillermo Coria|atp
+106432|Borna Coric|atp
+102374|Alex Corretja|atp
+101475|Carlos Costa|atp
+102610|Albert Costa|atp
+101793|Jim Courier|atp
+100073|Mark Cox|atp
+104655|Pablo Cuevas|atp
+100529|Kevin Curren|atp
+209260|Luciano Darderi|atp
+100855|Scott Davis|atp
+103786|Nikolay Davydenko|atp
+100203|Phil Dent|atp
+100445|Steve Denton|atp
+100232|Eddie Dibbs|atp
+105777|Grigor Dimitrov|atp
+200282|Jenny Dimond|atp
+104925|Novak Djokovic|atp
+105238|Alexandr Dolgopolov|atp
+207733|Jack Draper|atp
+100055|Cliff Drysdale|atp
+100345|Pat Dupre|atp
+101222|Stefan Edberg|atp
+100337|Mark Edmondson|atp
+106378|Kyle Edmund|atp
+101797|Jacco Eltingh|atp
+100022|Roy Emerson|atp
+102358|Thomas Enqvist|atp
+102765|Nicolas Escude|atp
+103819|Roger Federer|atp
+101965|Wayne Ferreira|atp
+103970|David Ferrer|atp
+103507|Juan Carlos Ferrero|atp
+100280|Wojtek Fibak|atp
+100115|Jaime Fillol|atp
+209950|Arthur Fils|atp
+103888|Mardy Fish|atp
+210097|Norma Flautero|atp
+100362|Peter Fleming|atp
+104926|Fabio Fognini|atp
+200221|Alejandro Davidovich Fokina|atp
+101098|Guy Forget|atp
+126203|Taylor Fritz|atp
+200221|Dianne Fromholtz|atp
+101746|Renzo Furlan|atp
+102998|Jan Michael Gambill|atp
+106426|Cristian Garin|atp
+104755|Richard Gasquet|atp
+102247|Andrea Gaudenzi|atp
+103292|Gaston Gaudio|atp
+100342|Vitas Gerulaitis|atp
+210150|Caterina Ghedin|atp
+100763|Brad Gilbert|atp
+100417|Hans Gildemeister|atp
+104068|Robby Ginepri|atp
+200615|Kristin Godridge|atp
+105676|David Goffin|atp
+100653|Andres Gomez|atp
+103602|Fernando Gonzalez|atp
+100127|Tom Gorman|atp
+100261|Brian Gottfried|atp
+104719|Marcel Granollers|atp
+103206|Sebastien Grosjean|atp
+105208|Ernests Gulbis|atp
+100252|Tim Gullikson|atp
+101320|Magnus Gustafsson|atp
+101235|Paul Haarhuis|atp
+103163|Tommy Haas|atp
+102450|Tim Henman|atp
+103720|Lleyton Hewitt|atp
+100300|Jose Higueras|atp
+101084|Jakob Hlasek|atp
+101510|Henrik Holm|atp
+100567|Chip Hooper|atp
+103103|Dominik Hrbaty|atp
+200005|Ugo Humbert|atp
+128034|Hubert Hurkacz|atp
+202103|Keiko Ishida|atp
+104545|John Isner|atp
+101964|Goran Ivanisevic|atp
+207518|Marisue Jacutin|atp
+101073|Martin Jaite|atp
+105668|Jerzy Janowicz|atp
+111797|Nicolas Jarry|atp
+100757|Anders Jarryd|atp
+100062|Francois Jauffret|atp
+102563|Thomas Johansson|atp
+104026|Joachim Johansson|atp
+200624|Tami Whitlinger Jones|atp
+102338|Yevgeny Kafelnikov|atp
+106234|Aslan Karatsev|atp
+103333|Ivo Karlovic|atp
+111575|Karen Khachanov|atp
+103017|Nicolas Kiefer|atp
+100113|Jan Kodes|atp
+104259|Philipp Kohlschreiber|atp
+101434|Petr Korda|atp
+200624|Sebastian Korda|atp
+102905|Stefan Koubek|atp
+101990|Richard Krajicek|atp
+101381|Aaron Krickstein|atp
+100532|Johan Kriek|atp
+102344|Karol Kucera|atp
+102856|Gustavo Kuerten|atp
+106401|Nick Kyrgios|atp
+102839|Nicolas Lapentti|atp
+101723|Magnus Larsson|atp
+100029|Rod Laver|atp
+100936|Henri Leconte|atp
+208103|Jiri Lehecka|atp
+100656|Ivan Lendl|atp
+100474|Chris Lewis|atp
+103344|Ivan Ljubicic|atp
+206173|Beatrice Lombardo|atp
+103852|Feliciano Lopez|atp
+100144|Bob Lutz|atp
+207830|Tomas Machac|atp
+103598|Xavier Malisse|atp
+101606|Alberto Mancini|atp
+105173|Adrian Mannarino|atp
+101195|Amos Mansdorf|atp
+102456|Felix Mantilla|atp
+101774|Todd Martin|atp
+103454|Nicolas Massu|atp
+100923|Wally Masur|atp
+103908|Paul Henri Mathieu|atp
+100272|Sandy Mayer|atp
+100428|Gene Mayer|atp
+104252|Florian Mayer|atp
+100689|Tim Mayotte|atp
+207989|Celena Mccoury|atp
+100581|John McEnroe|atp
+100383|Peter Mcnamara|atp
+101036|Miloslav Mecir|atp
+102446|Andrei Medvedev|atp
+106421|Daniil Medvedev|atp
+100179|Karl Meiler|atp
+103781|Jurgen Melzer|atp
+210150|Jakub Mensik|atp
+100092|Alex Metreveli|atp
+200282|Alex De Minaur|atp
+103018|Max Mirnyi|atp
+104338|Juan Monaco|atp
+104792|Gael Monfils|atp
+100376|Buster C Mottram|atp
+102845|Carlos Moya|atp
+104918|Andy Murray|atp
+208103|Daniela Murselovic|atp
+207518|Lorenzo Musetti|atp
+101404|Thomas Muster|atp
+104745|Rafael Nadal|atp
+103900|David Nalbandian|atp
+100119|Ilie Nastase|atp
+100087|John Newcombe|atp
+103813|Jarkko Nieminen|atp
+105453|Kei Nishikori|atp
+100676|Yannick Noah|atp
+102796|Magnus Norman|atp
+111815|Cameron Norrie|atp
+101120|Karel Novacek|atp
+102562|Jiri Novak|atp
+100893|Joakim Nystrom|atp
+100084|Tom Okker|atp
+124187|Reilly Opelka|atp
+100174|Manuel Orantes|atp
+105332|Benoit Paire|atp
+100214|Adriano Panatta|atp
+100135|Onny Parun|atp
+100815|David Pate|atp
+126205|Tommy Paul|atp
+102318|Andrei Pavel|atp
+100395|Victor Pecci|atp
+105550|Guido Pella|atp
+100944|Mikael Pernfors|atp
+100315|Hank Pfister|atp
+102882|Mark Philippoussis|atp
+100037|Nikola Pilic|atp
+100325|Ulrich Pinner|atp
+101611|Cedric Pioline|atp
+200615|Alexei Popyrin|atp
+102287|Albert Portas|atp
+105223|Juan Martin del Potro|atp
+106298|Lucas Pouille|atp
+101030|Goran Prpic|atp
+103264|Mariano Puerta|atp
+105023|Sam Querrey|atp
+102158|Patrick Rafter|atp
+100309|Raul Ramirez|atp
+105077|Albert Ramos|atp
+105683|Milos Raonic|atp
+101191|Richey Reneberg|atp
+100870|Christo Van Rensburg|atp
+100128|Cliff Richey|atp
+100060|Marty Riessen|atp
+102701|Marcelo Rios|atp
+103990|Tommy Robredo|atp
+100100|Tony Roche|atp
+104053|Andy Roddick|atp
+101649|Guillermo Perez Roldan|atp
+100016|Ken Rosewall|atp
+101820|Marc Rosset|atp
+101196|Derrick Rostagno|atp
+126094|Andrey Rublev|atp
+208029|Holger Rune|atp
+102257|Greg Rusedski|atp
+134770|Casper Ruud|atp
+100446|John Sadri|atp
+103498|Marat Safin|atp
+101948|Pete Sampras|atp
+101142|Emilio Sanchez|atp
+102148|Fabrice Santoro|atp
+100452|Bill Scanlon|atp
+102854|Sjeng Schalken|atp
+101582|Gilbert Schaller|atp
+102783|Rainer Schuettler|atp
+106043|Diego Schwartzman|atp
+104312|Andreas Seppi|atp
+207830|Maria Serra|atp
+133430|Denis Shapovalov|atp
+210097|Ben Shelton|atp
+101733|Jan Siemerink|atp
+104468|Gilles Simon|atp
+206173|Jannik Sinner|atp
+101511|Horst Skoff|atp
+100411|Pavel Slozil|atp
+100434|Tomas Smid|atp
+100126|Stan Smith|atp
+207733|Aimee Smith|atp
+106058|Jack Sock|atp
+104417|Robin Soderling|atp
+100286|Harold Solomon|atp
+102434|Vincent Spadea|atp
+102644|Franco Squillari|atp
+103387|Paradorn Srichaphan|atp
+101391|Carl Uwe Steeb|atp
+103285|Radek Stepanek|atp
+101529|Michael Stich|atp
+100229|Dick Stockton|atp
+101727|Jason Stoltenberg|atp
+101013|Henrik Sundstrom|atp
+101298|Jonas Svensson|atp
+126214|Alejandro Tabilo|atp
+202104|Kazue Takuma|atp
+100255|Roscoe Tanner|atp
+100332|Balazs Taroczy|atp
+100058|Roger Taylor|atp
+100360|Brian Teacher|atp
+100586|Eliot Teltscher|atp
+106233|Dominic Thiem|atp
+126207|Frances Tiafoe|atp
+210530|Learner Tien|atp
+104386|Janko Tipsarevic|atp
+106071|Bernard Tomic|atp
+104678|Viktor Troicki|atp
+126774|Stefanos Tsitsipas|atp
+104542|Jo-Wilfried Tsonga|atp
+100942|Thierry Tulasne|atp
+104098|Dmitry Tursunov|atp
+200473|Valentin Vacherot|atp
+104269|Fernando Verdasco|atp
+103280|Martin Verkerk|atp
+100282|Guillermo Vilas|atp
+209260|Andra Elena Voinea|atp
+101334|Alexander Volkov|atp
+100273|Kim Warwick|atp
+101613|Malivai Washington|atp
+200005|Jolene Watanabe|atp
+104527|Stan Wawrinka|atp
+101609|David Wheaton|atp
+101062|Mats Wilander|atp
+210530|Jennifer Witthoeft|atp
+101889|Todd Woodbridge|atp
+101185|Mark Woodforde|atp
+200000|X X|atp
+104022|Mikhail Youzhny|atp
+101409|Jaime Yzaga|atp
+100946|Slobodan Zivojinovic|atp
+100644|Alexander Zverev|atp
+206242|Armin Abbasian|wta
+200049|Amer Mohamed Abdo|wta
+211951|Tommy Adams|wta
+201478|Jim Agate|wta
+200636|Umut Akkoyun|wta
+200112|Alejandro Alaix|wta
+202428|Joao Pedro Alcantara|wta
+206420|Ekaterina Alexandrova|wta
+200673|Rayyan Aljufairi|wta
+201496|Ari Alkio|wta
+200110|Itai Allouche|wta
+202460|Alejandro Madrigal Alpizar|wta
+200961|Samo Amon|wta
+201590|Alison Riske Amritraj|wta
+200362|Siddharth Anand|wta
+200748|Andres Andrade|wta
+215370|Bianca Andreescu|wta
+259799|Mirra Andreeva|wta
+200764|Gian Luigi Angelini|wta
+216153|Amanda Anisimova|wta
+200037|Sabine Appelmans|wta
+206368|Pedro Aranda|wta
+200423|Lucas Aranguren|wta
+200069|Arsan Arashov|wta
+201344|Ornello Arlah|wta
+201347|Ornello Arlati|wta
+200630|Laura Arraya|wta
+200397|Tracy Austin|wta
+200366|Olukayode Alafia Damina Ayeni|wta
+201458|Victoria Azarenka|wta
+200652|Mohamed Abdel Aziz|wta
+201325|A Aziz|wta
+201490|Timea Bacsinszky|wta
+200401|Amir Hossein Badi|wta
+211651|Paula Badosa|wta
+201446|Sybille Bammer|wta
+200667|Jesus Tapiador Barajas|wta
+201497|Laercio Barriato|wta
+201294|Marion Bartoli|wta
+202458|Ashleigh Barty|wta
+200124|Alexey Baryshev|wta
+200653|Yayuk Basuki|wta
+200003|Jeremy Beale|wta
+201083|Daja Bedanova|wta
+202505|Belinda Bencic|wta
+201368|David Benhammou|wta
+202428|Kiki Bertens|wta
+200482|Rana Roop Singh Bhullar|wta
+200259|Ugo Blanchet|wta
+206108|Adam Blecha|wta
+200209|Grega Boh|wta
+200002|Caleb Boland|wta
+200664|Casper Bonapart|wta
+201416|Alona Bondarenko|wta
+200660|Thomas Bosancic|wta
+201474|K Botta|wta
+202446|Eugenie Bouchard|wta
+201520|Benoit Bouchet|wta
+200085|Mohamed Reda Boukhobza|wta
+206420|Lornzo Boveri|wta
+200764|Elena Bovina|wta
+202663|Boyle|wta
+206108|Jennifer Brady|wta
+200725|Jiri Broz|wta
+201521|Boyd Bryan|wta
+200357|Gabriel Bugiga|wta
+200372|Bettina Bunge|wta
+202596|Mihaela Buzarnescu|wta
+211533|Gianluca Cadenasso|wta
+201424|Alessandro Caggiari|wta
+200077|Jennifer Capriati|wta
+200116|Camilo Ugo Carabelli|wta
+200533|Pam Casale|wta
+200725|Sandra Cecchini|wta
+201499|J Cech|wta
+201320|Martin Chajdas|wta
+201403|Anna Chakvetadze|wta
+200080|Puriwat Chatpatcharoen|wta
+201611|Norman Chavez|wta
+201397|Don In Cho|wta
+201427|Liang Fu Chu|wta
+201495|Dominika Cibulkova|wta
+200079|Kim Clijsters|wta
+201709|Gavin Pr Clunie|wta
+200064|Amanda Coetzer|wta
+203389|Danielle Collins|wta
+200422|Raffaella Reggi Concato|wta
+200462|Belinda Cordwell|wta
+201427|Alize Cornet|wta
+200650|Isabel Cueto|wta
+201305|Eleni Daniilidou|wta
+200404|Hugo Daubias|wta
+200128|Lindsay Davenport|wta
+200109|Nathalie Dechy|wta
+200112|Julie Halard Decugis|wta
+200108|Elena Dementieva|wta
+201364|Frederic Derouvroy|wta
+200017|Aditya Deswal|wta
+211768|Manas Dhamne|wta
+200020|Morgan Dill|wta
+200027|Blazo N Djurovic|wta
+200651|Ben Doghmani|wta
+200120|Jelena Dokic|wta
+206252|Asaf Dori|wta
+200041|Dane Dunlap|wta
+200392|Jo Durie|wta
+201305|Oleg Dyachenko|wta
+200700|Silvia Farina Elia|wta
+200040|Keanu Ellen|wta
+200414|Kasper Elsvad|wta
+201506|Sara Errani|wta
+200259|Chris Evert|wta
+200357|Rosalyn Fairbank|wta
+200450|Ulugbek Fayzullaev|wta
+200548|Patty Fendick|wta
+200417|Gigi Fernandez|wta
+200597|Mary Joe Fernandez|wta
+220367|Leylah Fernandez|wta
+201446|Javier Ferrer|wta
+201490|Luis Filipe|wta
+201465|Kirsten Flipkens|wta
+200221|Alejandro Davidovich Fokina|wta
+200387|Piers Foley|wta
+200007|Quentin Folliot|wta
+200401|Manuela Maleeva Fragniere|wta
+201594|Bernard Frances|wta
+200772|Johann Georg Frankhauser|wta
+200041|Amy Frazier|wta
+200417|Axel Fries|wta
+200221|Dianne Fromholtz|wta
+200373|Bonnie Gadusek|wta
+200008|Alexis Galarneau|wta
+201614|Caroline Garcia|wta
+201286|Anabel Medina Garrigues|wta
+200404|Zina Garrison|wta
+201614|Ed Gaskell|wta
+200384|Hugo Gaston|wta
+221103|Coco Gauff|wta
+200128|Sahil Gaware|wta
+200554|Ruben Geeraert|wta
+201504|Julia Goerges|wta
+201364|Tatiana Golovin|wta
+201035|Kate Gompert|wta
+202492|Koen Gonnissen|wta
+200667|Ines Gorrochategui|wta
+200414|Steffi Graf|wta
+201394|Anna Lena Groenefeld|wta
+200032|Jose Roberto Gueiros|wta
+200472|Ayoub Guennaz|wta
+200462|Andrea Guerrieri|wta
+201019|Melissa Gurney|wta
+200006|Karina Habsudova|wta
+200651|Sabine Hack|wta
+200372|Alen Rogic Hadzalic|wta
+201594|Simona Halep|wta
+200366|Sylvia Hanika|wta
+201290|Daniela Hantuchova|wta
+200572|Nick Hardt|wta
+200959|Mareen Louie Harper|wta
+200003|Justine Henin|wta
+200001|Martina Hingis|wta
+200416|August Holmgren|wta
+200585|Kathy Horvath|wta
+200337|Yi Wei Huang|wta
+200081|Anke Huber|wta
+201619|Christian Hubscher|wta
+200037|Irfan Hussain|wta
+200601|Nidzhat Ibragimov|wta
+200700|Michael Ilett|wta
+200539|Konstantinos Ilia|wta
+200059|Ruxandra Dragomir Ilie|wta
+200077|Ikechukwu Iloputa|wta
+213027|Mary Innes|wta
+201421|Ana Ivanovic|wta
+202468|Nils Ivanovs|wta
+201400|Jurg Ivelic|wta
+202460|Ons Jabeur|wta
+201535|Jeff Jacklish|wta
+200381|Andrea Jaeger|wta
+200533|Archit Jain|wta
+200653|Ahmed Janahi|wta
+201347|Jelena Jankovic|wta
+201366|Juan Jimenez|wta
+201394|Yi Jin|wta
+200636|Danielle Jones|wta
+200389|Kathy Jordan|wta
+260300|Iva Jovic|wta
+214939|Anna Kalinskaya|wta
+201466|Kaia Kanepi|wta
+200065|Stamatis Kapiris|wta
+200397|Hindolo Karim|wta
+214082|Daria Kasatkina|wta
+200644|Shoma Kato|wta
+201540|Tighe Keating|wta
+200472|Helen Kelesi|wta
+201662|Pete Kendall|wta
+213550|Sofia Kenin|wta
+201493|Angelique Kerber|wta
+201204|Shane Kerr|wta
+201619|Madison Keys|wta
+200354|Claudia Kohde Kilsch|wta
+200190|Billie Jean King|wta
+201513|Stuart King|wta
+201373|Maria Kirilenko|wta
+200348|Konstantin Kirovski|wta
+201515|Alisa Kleybanova|wta
+200392|Omar Abdul Kodous|wta
+211951|Ana Konjuh|wta
+202427|Johanna Konta|wta
+204426|Anett Kontaveit|wta
+216146|Marta Kostyuk|wta
+201344|Klara Koukalova|wta
+200113|Anna Kournikova|wta
+200293|Daniel Krashin|wta
+200465|Lisa Bonder Kreiss|wta
+206252|Barbora Krejcikova|wta
+200124|Anne Kremer|wta
+200617|Kimiko Date Krumm|wta
+206368|Veronika Kudermetova|wta
+201320|Svetlana Kuznetsova|wta
+201520|Petra Kvitova|wta
+201458|Leo Lau|wta
+201545|Bill Lee|wta
+201019|Alessondro Di Lenola|wta
+201478|Varvara Lepchenko|wta
+201419|Na Li|wta
+200455|Aliaksandr Liaonenka|wta
+200048|Elena Likhovtseva|wta
+201290|Ken Lindner|wta
+202663|Magda Linette|wta
+201513|Sabine Lisicki|wta
+200496|Ivanhoe Lissanevitch|wta
+200585|Pablo Llanos|wta
+201345|Jacopo Lomonaco|wta
+201549|Claude London|wta
+200597|Andres Ariel Fernandez Lopez|wta
+200548|Yuri Lorenzi|wta
+200002|Mirjana Lucic|wta
+200673|Susan Sloane Lundy|wta
+200617|Emmanuel Luria|wta
+201466|Mike Mackay|wta
+200096|Dragos Nicolae Madaras|wta
+200961|Ivanna Madruga|wta
+200503|Gretchen Magers|wta
+206242|Beatriz Haddad Maia|wta
+200723|Iva Majoli|wta
+200107|Noah Makarome|wta
+201505|Kate Makarova|wta
+200421|Sherif Makhlouf|wta
+200086|Magdalena Maleeva|wta
+200455|Katerina Maleeva|wta
+200348|Hana Mandlikova|wta
+200421|Pascale Paradis Mangon|wta
+200422|Nicolas De Marco|wta
+200994|Maxime Godin Maresches|wta
+210722|Viktor Markov|wta
+201549|Petra Martic|wta
+200190|Nathan Martinet|wta
+200049|Conchita Martinez|wta
+204426|Javier Martinez|wta
+200389|Piotr Matuszewski|wta
+200065|Amelie Mauresmo|wta
+239475|Victoria Mboko|wta
+200554|Brenda Schultz Mccarthy|wta
+200699|Meredith Mcgrath|wta
+201504|Howard Mcguiness|wta
+200428|Lori Mcneil|wta
+201035|Yanquiel Medina|wta
+201492|Stefano Meneschincheri|wta
+210722|Elise Mertens|wta
+200601|Leila Meskhi|wta
+201311|Frank Messerer|wta
+200660|Kimberly Po Messerli|wta
+200453|Milos Mihajlovic|wta
+200120|Tarek Mira|wta
+201540|Kristina Mladenovic|wta
+200008|Alicia Molik|wta
+200395|Antoine Monaco|wta
+201425|Fabrizio Monagheddu|wta
+200080|Dominique Monami|wta
+202596|Luis Jose Morea|wta
+201515|Andrew Moriarty|wta
+200360|Yannis Moulod|wta
+200408|Alycia Moulton|wta
+214096|Karolina Muchova|wta
+200097|Patrick Mufumbila|wta
+202469|Garbine Muguruza|wta
+201212|Johan De Muynck|wta
+202458|Angelin Mvogo|wta
+200772|Anastasia Myskina|wta
+200033|Kushaan Nath|wta
+201521|Carla Suarez Navarro|wta
+215613|Emma Navarro|wta
+200293|Martina Navratilova|wta
+200011|Arvid Noren|wta
+222328|Linda Noskova|wta
+200539|Jana Novotna|wta
+201493|Paul O'Donoghue|wta
+200079|Thomas Otu Omang|wta
+211768|Naomi Osaka|wta
+201416|Josh Osswald|wta
+211533|Jelena Ostapenko|wta
+200063|Tatiana Panova|wta
+211148|Jasmine Paolini|wta
+202446|Alexander Carlos Parker|wta
+206289|Garrett Patton|wta
+200604|Barbara Paulus|wta
+201499|Anastasia Pavlyuchenkova|wta
+200081|Mikhail Pechalov|wta
+201424|Shahar Peer|wta
+202468|Jessica Pegula|wta
+201397|Shuai Peng|wta
+201355|Flavia Pennetta|wta
+200048|Igor Perunov|wta
+201492|Andrea Petkovic|wta
+200069|Nadia Petrova|wta
+202469|Olivier Peyret|wta
+200384|Eva Pfaff|wta
+200496|Terry Phelps|wta
+200096|Mary Pierce|wta
+201662|Karolina Pliskova|wta
+201329|Philippe Poisson|wta
+200006|Hugo Pontico|wta
+200375|Barbara Potter|wta
+201709|Yulia Putintseva|wta
+201403|Aleksandar Radojkovic|wta
+221054|Emma Raducanu|wta
+201474|Agnieszka Radwanska|wta
+200020|Lisa Raymond|wta
+200043|Virginie Razzano|wta
+200664|Stephanie Rehe|wta
+203354|Cade Resnick|wta
+202427|Cyril Respaut|wta
+201431|Aravane Rezai|wta
+203389|Rodolfo Ribeiro|wta
+201287|Mikael Robertson|wta
+200650|Jeremias Rocco|wta
+200039|Matthew Christopher Romios|wta
+202494|Frederic De Rouvroy|wta
+200039|Chanda Rubin|wta
+201505|Ruess|wta
+200604|Sergio Ruiz|wta
+200959|Sorin Rus|wta
+200337|Virginia Ruzici|wta
+200453|Catarina Lindqvist Ryan|wta
+214981|Elena Rybakina|wta
+201517|Magdalena Rybarikova|wta
+214544|Aryna Sabalenka|wta
+200572|Gabriela Sabatini|wta
+201294|David Saceanu|wta
+201425|Lucie Safarova|wta
+201336|Dinara Safina|wta
+200086|Toufik Sahtali|wta
+206289|Maria Sakkari|wta
+214643|Liudmila Samsonova|wta
+200113|Eric Samuelsson|wta
+201287|Maria Jose Martinez Sanchez|wta
+200699|Thiago Santos|wta
+201421|Antonis Saravias|wta
+200450|Larisa Savchenko|wta
+201611|Daria Saville|wta
+200644|Naoko Sawamatsu|wta
+200109|Sergey Schetinin|wta
+200032|Barbara Schett|wta
+201212|Francesca Schiavone|wta
+200067|Patty Schnyder|wta
+213027|David Schwarc|wta
+200381|Juan Cruz Scopetta|wta
+200408|Enzo Le Seguillon|wta
+200423|Carling Bassett Seguso|wta
+200652|Monica Seles|wta
+200027|Magui Serna|wta
+200046|Panji Untung Setiawan|wta
+201545|Anastasija Sevastova|wta
+201506|Lon Shapiro|wta
+201345|Maria Sharapova|wta
+200046|Meghann Shaughnessy|wta
+223670|Diana Shnaider|wta
+200360|Pam Shriver|wta
+200009|Benjamin Sigouin|wta
+200067|Jack W Van Slyke|wta
+200040|Anna Smashnova|wta
+213550|Connor Smillie|wta
+202505|Mark Smith|wta
+200362|Liz Smylie|wta
+200016|Alex Solanki|wta
+201431|Francesco Solsona|wta
+200083|Hugo Israel Pacheco Soto|wta
+200051|Irina Spirlea|wta
+201368|Karolina Sprem|wta
+200630|Alexander Zverev Sr|wta
+200011|Katarina Srebotnik|wta
+211148|Jack Staton|wta
+200354|Amit Stein|wta
+201355|Patrick Steiner|wta
+201585|Sloane Stephens|wta
+200083|Alexandra Stevenson|wta
+200001|Augusto Stodart|wta
+201325|Samantha Stosur|wta
+201366|Barbora Strycova|wta
+200419|Kathy Rinaldi Stunkel|wta
+200107|Paola Suarez|wta
+200085|Ai Sugiyama|wta
+200377|Helena Sukova|wta
+200503|J Sutter|wta
+202494|Elina Svitolina|wta
+216347|Iga Swiatek|wta
+200043|Yoga Argi Syahputra|wta
+201497|Agnes Szavay|wta
+200007|Silvija Talaja|wta
+200009|Tamarine Tanasugarn|wta
+200395|Catherine Tanvier|wta
+200442|Dostanbek Tashbulatov|wta
+220704|Clara Tauson|wta
+200097|Nathalie Tauziat|wta
+200063|Ruy Guedes Teixeira|wta
+200442|Andrea Temesvari|wta
+200016|Sandrine Testud|wta
+202499|Yuval Toledano|wta
+200373|Fran Tonejc|wta
+200994|Michelle Torres|wta
+201495|John Tregonning|wta
+203354|Martina Trevisan|wta
+200723|Mario Trnovsky|wta
+201465|Youhei Tsuji|wta
+201204|Iroda Tulyaganova|wta
+200209|Wendy Turnbull|wta
+201400|Nicole Vaidisova|wta
+201419|Luis Valcacel|wta
+201535|Coco Vandeweghe|wta
+211651|Alexander Vasilev|wta
+202499|Donna Vekic|wta
+200465|Sem Verbeek|wta
+201455|Elena Vesnina|wta
+200017|Arantxa Sanchez Vicario|wta
+201585|Vicens|wta
+201311|Roberta Vinci|wta
+201373|Massimo Visconti|wta
+200108|Matej Vocel|wta
+214954|Marketa Vondrousova|wta
+201517|N Van Der Voordt|wta
+202492|Qiang Wang|wta
+201336|Todd Watkins|wta
+201386|R Weber|wta
+200428|Till Wegner|wta
+201286|Richard Wenerhjeim|wta
+201083|Michael Westbrooks|wta
+200387|Anne White|wta
+200416|Robin White|wta
+201518|Yanina Wickmayer|wta
+200482|Judith Wiesner|wta
+200033|Serena Williams|wta
+200748|Venus Williams|wta
+201496|Caroline Wozniacki|wta
+200059|Yibing Wu|wta
+200375|Kento Yamada|wta
+201455|Andrew Yarmola|wta
+200377|Omer Yeshaya|wta
+201518|Jeff Young|wta
+200064|Athanasios Zannias|wta
+201590|Stephen Zeilen|wta
+200051|Zuxin Zheng|wta
+201386|Jie Zheng|wta
+221012|Qinwen Zheng|wta
+200419|Jonas Eriksson Ziverts|wta
+200110|Fabiola Zuluaga|wta
+200116|Natalia Zvereva|wta
+201329|Vera Zvonareva|wta

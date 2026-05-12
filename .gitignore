@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# Local databases (mai committare — sono enormi)
+tennis_stats.db
+tennis_stats.db-*
+*.db-shm
+*.db-wal
+
+# Cloud secrets / replicas
+cloud/.env
+replica.db
+replica.db-*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log

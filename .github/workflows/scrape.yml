@@ -1,0 +1,100 @@
+name: 4-Hourly Tennis Scrape
+
+on:
+  schedule:
+    # Every 4 hours at :07 (off the hour to avoid GH Actions queue spikes)
+    - cron: '7 */4 * * *'
+  workflow_dispatch:
+    inputs:
+      top_n:
+        description: 'Top-N players to refresh'
+        required: false
+        default: '1000'
+      skip_extended:
+        description: 'Skip extended stats pass'
+        required: false
+        default: 'false'
+      extended_budget:
+        description: 'Max extended-stat players per tour'
+        required: false
+        default: '120'
+      inactive_extended_budget:
+        description: 'Max inactive extended refreshes per tour'
+        required: false
+        default: '20'
+      max_workers:
+        description: 'Max parallel TennisAbstract match fetches'
+        required: false
+        default: '8'
+      min_year:
+        description: 'Drop scraped matches before this year'
+        required: false
+        default: '2025'
+
+# Only one scrape at a time — newer runs cancel older queued ones.
+concurrency:
+  group: tennis-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN:   ${{ secrets.TURSO_AUTH_TOKEN }}
+      TURSO_LOCAL_PATH:   ${{ github.workspace }}/replica.db
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cloud.txt
+
+      - name: Validate Turso secrets
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ] || [ -z "$TURSO_AUTH_TOKEN" ]; then
+            echo "::error::TURSO_DATABASE_URL and TURSO_AUTH_TOKEN secrets must be set"
+            exit 1
+          fi
+
+      - name: Run scrape job
+        run: |
+          TOP_N="${{ github.event.inputs.top_n || '1000' }}"
+          EXTENDED_BUDGET="${{ github.event.inputs.extended_budget || '120' }}"
+          INACTIVE_EXTENDED_BUDGET="${{ github.event.inputs.inactive_extended_budget || '20' }}"
+          MAX_WORKERS="${{ github.event.inputs.max_workers || '8' }}"
+          MIN_YEAR="${{ github.event.inputs.min_year || '2025' }}"
+          EXTRA=""
+          if [ "${{ github.event.inputs.skip_extended }}" = "true" ]; then
+            EXTRA="--no-extended"
+          fi
+          python -m cloud.scrape_job \
+            --top "$TOP_N" \
+            --extended-budget "$EXTENDED_BUDGET" \
+            --inactive-extended-budget "$INACTIVE_EXTENDED_BUDGET" \
+            --max-workers "$MAX_WORKERS" \
+            --min-year "$MIN_YEAR" \
+            $EXTRA
+
+      - name: Upload replica snapshot (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replica-${{ github.run_id }}
+          path: replica.db
+          retention-days: 3
+          if-no-files-found: ignore
+
+# trigger reindex
