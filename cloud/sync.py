@@ -131,6 +131,56 @@ def _copy_table(
     return total
 
 
+def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
+    aliases = [
+        ("%monte carlo%", "Monte Carlo Masters", "Monte Carlo Masters"),
+        ("%indian wells%", "Indian Wells Masters", "Indian Wells"),
+        ("%miami%", "Miami Masters", "Miami"),
+        ("%madrid%", "Madrid Masters", "WTA Madrid"),
+        ("%rome%", "Rome Masters", "WTA Rome"),
+        ("%italian open%", "Rome Masters", "WTA Rome"),
+        ("%cincinnati%", "Cincinnati Masters", "Cincinnati"),
+        ("%shanghai%", "Shanghai Masters", "Shanghai Masters"),
+        ("%paris masters%", "Paris Masters", "Paris Masters"),
+    ]
+    changed = 0
+    for pattern, atp_name, wta_name in aliases:
+        local.execute(
+            """
+            UPDATE matches
+            SET tourney_name = CASE
+                WHEN tour = 'wta' THEN ?
+                ELSE ?
+            END
+            WHERE tourney_id = 'SCRAPED'
+              AND LOWER(tourney_name) LIKE ?
+            """,
+            (wta_name, atp_name, pattern),
+        )
+        changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        DELETE FROM matches
+        WHERE rowid IN (
+            SELECT later.rowid
+            FROM matches kept
+            JOIN matches later
+              ON kept.rowid < later.rowid
+             AND kept.tourney_id = later.tourney_id
+             AND kept.tourney_id = 'SCRAPED'
+             AND later.tourney_id = 'SCRAPED'
+             AND kept.tour = later.tour
+             AND SUBSTR(kept.tourney_date, 1, 4) = SUBSTR(later.tourney_date, 1, 4)
+             AND kept.tourney_name = later.tourney_name
+             AND kept.round = later.round
+             AND kept.winner_name = later.winner_name
+             AND kept.loser_name = later.loser_name
+        )
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+    return changed
+
+
 def sync_cloud_to_local(
     local_db_path: Optional[Path] = None,
     progress_callback: Optional[Callable[[str, int], None]] = None,
@@ -196,6 +246,11 @@ def sync_cloud_to_local(
         if n_dedup:
             logger.info("  matches: removed %d SCRAPED rows that duplicate CSV data",
                         n_dedup)
+        n_canonical = _canonicalize_scraped_matches(local)
+        if n_canonical:
+            logger.info(
+                "  matches: canonicalized/removed %d SCRAPED duplicate rows",
+                n_canonical)
 
         # 2) rankings: only the live snapshot
         counts["rankings"] = _copy_table(

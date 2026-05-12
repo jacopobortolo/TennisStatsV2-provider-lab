@@ -264,8 +264,10 @@ class SofaScoreMatchProvider(MatchProvider):
 
         winner = home if winner_code == 1 else away
         loser = away if winner_code == 1 else home
-        winner_name = winner.get("name") or winner.get("shortName")
-        loser_name = loser.get("name") or loser.get("shortName")
+        winner_name = self._clean_team_name(
+            winner.get("name") or winner.get("shortName"))
+        loser_name = self._clean_team_name(
+            loser.get("name") or loser.get("shortName"))
         if not winner_name or not loser_name:
             return None
 
@@ -383,6 +385,17 @@ class SofaScoreMatchProvider(MatchProvider):
             except (TypeError, ValueError):
                 continue
         return round(seconds / 60) if seconds > 0 else None
+
+    @staticmethod
+    def _clean_team_name(name: str | None) -> str | None:
+        if not name:
+            return name
+        return re.sub(
+            r"\s*\((?:\d+|PR|Q|WC|LL|SE|ALT)\)\s*$",
+            "",
+            str(name).strip(),
+            flags=re.IGNORECASE,
+        )
 
     def _is_doubles_event(self, event: dict[str, Any], home: dict[str, Any],
                           away: dict[str, Any], tourney_name: str) -> bool:

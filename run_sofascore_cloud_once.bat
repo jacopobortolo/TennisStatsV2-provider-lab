@@ -29,7 +29,7 @@ if not %ERRORLEVEL% EQU 0 (
 )
 
 echo Writing log to %LOGFILE%
-"%PY%" -m cloud.scrape_job --top 1000 --no-extended --min-year 2026 --match-provider hybrid --max-matches-per-player 3 > "%LOGFILE%" 2>&1
+"%PY%" -m cloud.scrape_job --top 1000 --no-extended --min-year 2026 --match-provider hybrid --max-matches-per-player 10 > "%LOGFILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
     echo SofaScore cloud scrape failed with exit code %RC%. See %LOGFILE%

@@ -97,7 +97,7 @@ Windows user logs in. That batch starts the local SofaScore proxy if needed,
 then runs:
 
 ```powershell
-python -m cloud.scrape_job --top 1000 --no-extended --min-year 2026 --match-provider hybrid --max-matches-per-player 3
+python -m cloud.scrape_job --top 1000 --no-extended --min-year 2026 --match-provider hybrid --max-matches-per-player 10
 ```
 
 Logs are written to `%USERPROFILE%\.tennis_analytics\logs`. The desktop app

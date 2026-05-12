@@ -4,6 +4,7 @@ SQLite database layer for fast querying of tennis data.
 
 import sqlite3
 import logging
+import re
 import threading
 import unicodedata
 import uuid
@@ -39,6 +40,7 @@ def _player_match_key(name):
     """
     if not isinstance(name, str) or not name:
         return ""
+    name = _strip_player_seed_marker(name)
     # Re-use the scraper's transliteration table (handles ø/ł/ı/ş/ğ/ß/…)
     # plus NFKD diacritic stripping.
     try:
@@ -51,6 +53,44 @@ def _player_match_key(name):
     s = s.replace("-", " ")
     s = " ".join(s.split())
     return s.lower()
+
+
+def _strip_player_seed_marker(name):
+    """Remove seed/entry markers that some live providers append to names."""
+    if not isinstance(name, str):
+        return name
+    return re.sub(
+        r"\s*\((?:\d+|PR|Q|WC|LL|SE|ALT)\)\s*$",
+        "",
+        name.strip(),
+        flags=re.IGNORECASE,
+    )
+
+
+def _canonical_scraped_tourney_name(name, tour=None):
+    """Map common live-provider tournament labels to TennisAbstract names."""
+    if not isinstance(name, str) or not name.strip():
+        return name
+    label = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+    label = re.sub(r"^(atp|wta)\s+", "", label).strip()
+    is_wta = str(tour or "").lower() == "wta"
+    if "monte carlo" in label:
+        return "Monte Carlo Masters"
+    if "indian wells" in label:
+        return "Indian Wells" if is_wta else "Indian Wells Masters"
+    if label == "miami" or "miami open" in label:
+        return "Miami" if is_wta else "Miami Masters"
+    if "madrid" in label:
+        return "WTA Madrid" if is_wta else "Madrid Masters"
+    if "rome" in label or "italian open" in label:
+        return "WTA Rome" if is_wta else "Rome Masters"
+    if "cincinnati" in label:
+        return "Cincinnati" if is_wta else "Cincinnati Masters"
+    if "shanghai" in label:
+        return "Shanghai Masters"
+    if "paris masters" in label:
+        return "Paris Masters"
+    return name.strip()
 
 
 def _locked_write(method):
@@ -557,6 +597,12 @@ class TennisDatabase:
         except Exception:
             logger.exception(
                 "Failed to fix scraped match tour field "
+                "(non-fatal, will retry on next start)")
+        try:
+            self._migrate_canonicalize_scraped_tourney_names(cur)
+        except Exception:
+            logger.exception(
+                "Failed to canonicalize scraped tournament names "
                 "(non-fatal, will retry on next start)")
         # --- Phase 2 composite indexes for faster queries ---
         cur.executescript("""
@@ -2292,12 +2338,18 @@ class TennisDatabase:
         def _normalize_player_name(name):
             if not isinstance(name, str):
                 return name
+            name = _strip_player_seed_marker(name)
             return _strip_diacritics(name).replace("-", " ")
 
         matches_df = matches_df.copy()
         for col in ("winner_name", "loser_name"):
             if col in matches_df.columns:
                 matches_df[col] = matches_df[col].apply(_normalize_player_name)
+        if "tourney_name" in matches_df.columns:
+            def _canon_row(row):
+                return _canonical_scraped_tourney_name(
+                    row.get("tourney_name"), row.get("tour"))
+            matches_df["tourney_name"] = matches_df.apply(_canon_row, axis=1)
 
         # Build a name→id and name→ioc cache from existing players.
         # Filter by tour when possible to halve the rows read on remote
@@ -3351,6 +3403,53 @@ class TennisDatabase:
             logger.info(
                 "Fixed tour field for %d scraped WTA match pairs "
                 "(was 'atp', now 'wta')", updated_pairs)
+
+    def _migrate_canonicalize_scraped_tourney_names(self, cur):
+        """Normalize common live-provider tournament aliases in matches."""
+        aliases = [
+            ("%monte carlo%", "Monte Carlo Masters", "Monte Carlo Masters"),
+            ("%indian wells%", "Indian Wells Masters", "Indian Wells"),
+            ("%miami%", "Miami Masters", "Miami"),
+            ("%madrid%", "Madrid Masters", "WTA Madrid"),
+            ("%rome%", "Rome Masters", "WTA Rome"),
+            ("%italian open%", "Rome Masters", "WTA Rome"),
+            ("%cincinnati%", "Cincinnati Masters", "Cincinnati"),
+            ("%shanghai%", "Shanghai Masters", "Shanghai Masters"),
+            ("%paris masters%", "Paris Masters", "Paris Masters"),
+        ]
+        for pattern, atp_name, wta_name in aliases:
+            cur.execute(
+                """
+                UPDATE matches
+                SET tourney_name = CASE
+                    WHEN tour = 'wta' THEN ?
+                    ELSE ?
+                END
+                WHERE tourney_id = 'SCRAPED'
+                  AND LOWER(tourney_name) LIKE ?
+                """,
+                (wta_name, atp_name, pattern),
+            )
+
+        cur.execute("""
+            DELETE FROM matches
+            WHERE rowid IN (
+                SELECT later.rowid
+                FROM matches kept
+                JOIN matches later
+                  ON kept.rowid < later.rowid
+                 AND kept.tourney_id = later.tourney_id
+                 AND kept.tourney_id = 'SCRAPED'
+                 AND later.tourney_id = 'SCRAPED'
+                 AND kept.tour = later.tour
+                 AND SUBSTR(kept.tourney_date, 1, 4) = SUBSTR(later.tourney_date, 1, 4)
+                 AND kept.tourney_name = later.tourney_name
+                 AND kept.round = later.round
+                 AND kept.winner_name = later.winner_name
+                 AND kept.loser_name = later.loser_name
+            )
+        """)
+        self.conn.commit()
 
     def get_extended_stats_count(self, player_name):
         """Return count of extended stats records per table for a player."""
