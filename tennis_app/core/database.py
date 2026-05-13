@@ -67,30 +67,62 @@ def _strip_player_seed_marker(name):
     )
 
 
-def _canonical_scraped_tourney_name(name, tour=None):
+_MASTERS_ALIAS_RULES = [
+    ("monte carlo", "Monte Carlo", "Monte Carlo Masters", "Monte Carlo"),
+    ("indian wells", "Indian Wells", "Indian Wells Masters", "Indian Wells"),
+    ("miami", "Miami", "Miami Masters", "Miami"),
+    ("madrid", "Madrid", "Madrid Masters", "WTA Madrid"),
+    ("rome", "Rome", "Rome Masters", "WTA Rome"),
+    ("italian open", "Rome", "Rome Masters", "WTA Rome"),
+    ("cincinnati", "Cincinnati", "Cincinnati Masters", "Cincinnati"),
+    ("shanghai", "Shanghai", "Shanghai Masters", "Shanghai"),
+    ("paris masters", "Paris", "Paris Masters", "Paris"),
+]
+
+
+def _canonical_live_event_name(city, atp_name, wta_name, tour=None, level=None):
+    is_wta = str(tour or "").lower() == "wta"
+    level_text = str(level or "").strip().upper()
+    if level_text == "C":
+        return f"{city} CH"
+    if level_text.isdigit():
+        return f"{'W' if is_wta else 'M'}{level_text} {city}"
+    if level_text == "M":
+        return atp_name
+    if level_text in {"PM", "P", "W"}:
+        return wta_name
+    return wta_name if is_wta else city
+
+
+def _canonical_scraped_tourney_name(name, tour=None, level=None):
     """Map common live-provider tournament labels to TennisAbstract names."""
     if not isinstance(name, str) or not name.strip():
         return name
     label = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
     label = re.sub(r"^(atp|wta)\s+", "", label).strip()
-    is_wta = str(tour or "").lower() == "wta"
-    if "monte carlo" in label:
-        return "Monte Carlo Masters"
-    if "indian wells" in label:
-        return "Indian Wells" if is_wta else "Indian Wells Masters"
-    if label == "miami" or "miami open" in label:
-        return "Miami" if is_wta else "Miami Masters"
-    if "madrid" in label:
-        return "WTA Madrid" if is_wta else "Madrid Masters"
-    if "rome" in label or "italian open" in label:
-        return "WTA Rome" if is_wta else "Rome Masters"
-    if "cincinnati" in label:
-        return "Cincinnati" if is_wta else "Cincinnati Masters"
-    if "shanghai" in label:
-        return "Shanghai Masters"
-    if "paris masters" in label:
-        return "Paris Masters"
+    level_text = str(level or "").strip().upper()
+    for pattern, city, atp_name, wta_name in _MASTERS_ALIAS_RULES:
+        if pattern in label:
+            if "challenger" in label:
+                return f"{city} CH"
+            return _canonical_live_event_name(
+                city, atp_name, wta_name, tour=tour, level=level_text)
     return name.strip()
+
+
+def _canonical_scraped_round(round_name):
+    """Normalize live-provider qualifying labels to DB round codes."""
+    if not isinstance(round_name, str) or not round_name.strip():
+        return round_name
+    raw = round_name.strip()
+    label = re.sub(r"[^a-z0-9]+", " ", raw.lower()).strip()
+    if raw in {"Q1", "Q2"}:
+        return raw
+    if "qual" in label:
+        if "final" in label or re.search(r"\b(?:2|2nd|second)\b", label):
+            return "Q2"
+        return "Q1"
+    return raw
 
 
 def _locked_write(method):
@@ -2348,8 +2380,12 @@ class TennisDatabase:
         if "tourney_name" in matches_df.columns:
             def _canon_row(row):
                 return _canonical_scraped_tourney_name(
-                    row.get("tourney_name"), row.get("tour"))
+                    row.get("tourney_name"), row.get("tour"),
+                    row.get("tourney_level"))
             matches_df["tourney_name"] = matches_df.apply(_canon_row, axis=1)
+        if "round" in matches_df.columns:
+            matches_df["round"] = matches_df["round"].apply(
+                _canonical_scraped_round)
 
         # Build a name→id and name→ioc cache from existing players.
         # Filter by tour when possible to halve the rows read on remote
@@ -3406,30 +3442,120 @@ class TennisDatabase:
 
     def _migrate_canonicalize_scraped_tourney_names(self, cur):
         """Normalize common live-provider tournament aliases in matches."""
-        aliases = [
-            ("%monte carlo%", "Monte Carlo Masters", "Monte Carlo Masters"),
-            ("%indian wells%", "Indian Wells Masters", "Indian Wells"),
-            ("%miami%", "Miami Masters", "Miami"),
-            ("%madrid%", "Madrid Masters", "WTA Madrid"),
-            ("%rome%", "Rome Masters", "WTA Rome"),
-            ("%italian open%", "Rome Masters", "WTA Rome"),
-            ("%cincinnati%", "Cincinnati Masters", "Cincinnati"),
-            ("%shanghai%", "Shanghai Masters", "Shanghai Masters"),
-            ("%paris masters%", "Paris Masters", "Paris Masters"),
-        ]
-        for pattern, atp_name, wta_name in aliases:
+        for pattern, city, atp_name, wta_name in _MASTERS_ALIAS_RULES:
+            labels = {atp_name.lower(), wta_name.lower(), city.lower()}
+            if pattern == "italian open":
+                labels.add("italian open")
+            if pattern == "paris masters":
+                labels = {"paris masters"}
+            placeholders = ",".join("?" for _ in labels)
             cur.execute(
-                """
+                f"""
                 UPDATE matches
                 SET tourney_name = CASE
-                    WHEN tour = 'wta' THEN ?
+                    WHEN tourney_level = 'C' THEN ?
+                    WHEN tourney_level GLOB '[0-9]*' THEN
+                        CASE WHEN tour = 'wta'
+                             THEN 'W' || tourney_level || ' ' || ?
+                             ELSE 'M' || tourney_level || ' ' || ?
+                        END
+                    WHEN tourney_level = 'M' THEN ?
+                    WHEN tourney_level IN ('PM', 'P', 'W') THEN ?
                     ELSE ?
                 END
                 WHERE tourney_id = 'SCRAPED'
-                  AND LOWER(tourney_name) LIKE ?
+                  AND LOWER(tourney_name) IN ({placeholders})
                 """,
-                (wta_name, atp_name, pattern),
+                (f"{city} CH", city, city, atp_name, wta_name, city, *labels),
             )
+
+        cur.execute("""
+            UPDATE matches
+            SET tour = 'wta'
+            WHERE tourney_id = 'SCRAPED'
+              AND tourney_name IN (
+                  'WTA Madrid', 'WTA Rome', 'Indian Wells', 'Miami',
+                  'Cincinnati', 'Monte Carlo', 'Shanghai', 'Paris'
+              )
+              AND tourney_level IN ('PM', 'P', 'W')
+        """)
+
+        cur.execute("""
+            UPDATE matches
+            SET tour = 'wta'
+            WHERE tourney_id = 'SCRAPED'
+              AND tour = 'atp'
+              AND tourney_level GLOB '[0-9]*'
+              AND EXISTS (
+                  SELECT 1
+                  FROM players p
+                  WHERE p.tour = 'wta'
+                    AND (p.name_first || ' ' || p.name_last) IN (
+                        matches.winner_name, matches.loser_name
+                    )
+              )
+        """)
+
+        cur.execute("""
+            UPDATE matches
+            SET tourney_name =
+                'W' || tourney_level || SUBSTR(
+                    tourney_name, LENGTH('M' || tourney_level) + 1)
+            WHERE tourney_id = 'SCRAPED'
+              AND tour = 'wta'
+              AND tourney_level GLOB '[0-9]*'
+              AND tourney_name LIKE 'M' || tourney_level || ' %'
+        """)
+
+        cur.execute("""
+            DELETE FROM matches
+            WHERE rowid IN (
+                SELECT other.rowid
+                FROM matches canonical
+                JOIN matches other
+                  ON canonical.tourney_id = 'SCRAPED'
+                 AND other.tourney_id = 'SCRAPED'
+                 AND canonical.rowid != other.rowid
+                 AND canonical.round IN ('Q1', 'Q2')
+                 AND other.round NOT IN ('Q1', 'Q2')
+                 AND canonical.tour = other.tour
+                 AND SUBSTR(canonical.tourney_date, 1, 4) = SUBSTR(other.tourney_date, 1, 4)
+                 AND canonical.tourney_name = other.tourney_name
+                 AND canonical.winner_name = other.winner_name
+                 AND canonical.loser_name = other.loser_name
+                 AND COALESCE(canonical.score, '') = COALESCE(other.score, '')
+                 AND (
+                    LOWER(COALESCE(other.round, '')) IN (
+                        'qualification', 'qualifications',
+                        'qualification final', 'qualifying final',
+                        'qualification round 1', 'qualifying round 1',
+                        'qualification round 2', 'qualifying round 2'
+                    )
+                    OR (other.round = 'R1' AND canonical.round = 'Q1')
+                    OR (other.round = 'R2' AND canonical.round = 'Q2')
+                 )
+            )
+        """)
+
+        cur.execute("""
+            UPDATE matches
+            SET round = CASE
+                WHEN LOWER(COALESCE(round, '')) IN (
+                    'qualification final', 'qualifying final',
+                    'final qualifying round', 'qualification round 2',
+                    'qualifying round 2', 'qualification second round',
+                    'qualifying second round'
+                ) THEN 'Q2'
+                WHEN LOWER(COALESCE(round, '')) IN (
+                    'qualification', 'qualifications', 'qualifying',
+                    'qualification round 1', 'qualifying round 1',
+                    'qualification first round', 'qualifying first round'
+                ) THEN 'Q1'
+                ELSE round
+            END
+            WHERE tourney_id = 'SCRAPED'
+              AND LOWER(COALESCE(round, '')) LIKE '%qual%'
+        """)
 
         cur.execute("""
             DELETE FROM matches

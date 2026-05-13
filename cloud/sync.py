@@ -133,31 +133,137 @@ def _copy_table(
 
 def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
     aliases = [
-        ("%monte carlo%", "Monte Carlo Masters", "Monte Carlo Masters"),
-        ("%indian wells%", "Indian Wells Masters", "Indian Wells"),
-        ("%miami%", "Miami Masters", "Miami"),
-        ("%madrid%", "Madrid Masters", "WTA Madrid"),
-        ("%rome%", "Rome Masters", "WTA Rome"),
-        ("%italian open%", "Rome Masters", "WTA Rome"),
-        ("%cincinnati%", "Cincinnati Masters", "Cincinnati"),
-        ("%shanghai%", "Shanghai Masters", "Shanghai Masters"),
-        ("%paris masters%", "Paris Masters", "Paris Masters"),
+        ("monte carlo", "Monte Carlo", "Monte Carlo Masters", "Monte Carlo"),
+        ("indian wells", "Indian Wells", "Indian Wells Masters", "Indian Wells"),
+        ("miami", "Miami", "Miami Masters", "Miami"),
+        ("madrid", "Madrid", "Madrid Masters", "WTA Madrid"),
+        ("rome", "Rome", "Rome Masters", "WTA Rome"),
+        ("italian open", "Rome", "Rome Masters", "WTA Rome"),
+        ("cincinnati", "Cincinnati", "Cincinnati Masters", "Cincinnati"),
+        ("shanghai", "Shanghai", "Shanghai Masters", "Shanghai"),
+        ("paris masters", "Paris", "Paris Masters", "Paris"),
     ]
     changed = 0
-    for pattern, atp_name, wta_name in aliases:
+    for pattern, city, atp_name, wta_name in aliases:
+        labels = {atp_name.lower(), wta_name.lower(), city.lower()}
+        if pattern == "italian open":
+            labels.add("italian open")
+        if pattern == "paris masters":
+            labels = {"paris masters"}
+        placeholders = ",".join("?" for _ in labels)
         local.execute(
-            """
+            f"""
             UPDATE matches
             SET tourney_name = CASE
-                WHEN tour = 'wta' THEN ?
+                WHEN tourney_level = 'C' THEN ?
+                WHEN tourney_level GLOB '[0-9]*' THEN
+                    CASE WHEN tour = 'wta'
+                         THEN 'W' || tourney_level || ' ' || ?
+                         ELSE 'M' || tourney_level || ' ' || ?
+                    END
+                WHEN tourney_level = 'M' THEN ?
+                WHEN tourney_level IN ('PM', 'P', 'W') THEN ?
                 ELSE ?
             END
             WHERE tourney_id = 'SCRAPED'
-              AND LOWER(tourney_name) LIKE ?
+              AND LOWER(tourney_name) IN ({placeholders})
             """,
-            (wta_name, atp_name, pattern),
+            (f"{city} CH", city, city, atp_name, wta_name, city, *labels),
         )
         changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        UPDATE matches
+        SET tour = 'wta'
+        WHERE tourney_id = 'SCRAPED'
+          AND tourney_name IN (
+              'WTA Madrid', 'WTA Rome', 'Indian Wells', 'Miami',
+              'Cincinnati', 'Monte Carlo', 'Shanghai', 'Paris'
+          )
+          AND tourney_level IN ('PM', 'P', 'W')
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        UPDATE matches
+        SET tour = 'wta'
+        WHERE tourney_id = 'SCRAPED'
+          AND tour = 'atp'
+          AND tourney_level GLOB '[0-9]*'
+          AND EXISTS (
+              SELECT 1
+              FROM players p
+              WHERE p.tour = 'wta'
+                AND (p.name_first || ' ' || p.name_last) IN (
+                    matches.winner_name, matches.loser_name
+                )
+          )
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        UPDATE matches
+        SET tourney_name =
+            'W' || tourney_level || SUBSTR(
+                tourney_name, LENGTH('M' || tourney_level) + 1)
+        WHERE tourney_id = 'SCRAPED'
+          AND tour = 'wta'
+          AND tourney_level GLOB '[0-9]*'
+          AND tourney_name LIKE 'M' || tourney_level || ' %'
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        DELETE FROM matches
+        WHERE rowid IN (
+            SELECT other.rowid
+            FROM matches canonical
+            JOIN matches other
+              ON canonical.tourney_id = 'SCRAPED'
+             AND other.tourney_id = 'SCRAPED'
+             AND canonical.rowid != other.rowid
+             AND canonical.round IN ('Q1', 'Q2')
+             AND other.round NOT IN ('Q1', 'Q2')
+             AND canonical.tour = other.tour
+             AND SUBSTR(canonical.tourney_date, 1, 4) = SUBSTR(other.tourney_date, 1, 4)
+             AND canonical.tourney_name = other.tourney_name
+             AND canonical.winner_name = other.winner_name
+             AND canonical.loser_name = other.loser_name
+             AND COALESCE(canonical.score, '') = COALESCE(other.score, '')
+             AND (
+                LOWER(COALESCE(other.round, '')) IN (
+                    'qualification', 'qualifications',
+                    'qualification final', 'qualifying final',
+                    'qualification round 1', 'qualifying round 1',
+                    'qualification round 2', 'qualifying round 2'
+                )
+                OR (other.round = 'R1' AND canonical.round = 'Q1')
+                OR (other.round = 'R2' AND canonical.round = 'Q2')
+             )
+        )
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        UPDATE matches
+        SET round = CASE
+            WHEN LOWER(COALESCE(round, '')) IN (
+                'qualification final', 'qualifying final',
+                'final qualifying round', 'qualification round 2',
+                'qualifying round 2', 'qualification second round',
+                'qualifying second round'
+            ) THEN 'Q2'
+            WHEN LOWER(COALESCE(round, '')) IN (
+                'qualification', 'qualifications', 'qualifying',
+                'qualification round 1', 'qualifying round 1',
+                'qualification first round', 'qualifying first round'
+            ) THEN 'Q1'
+            ELSE round
+        END
+        WHERE tourney_id = 'SCRAPED'
+          AND LOWER(COALESCE(round, '')) LIKE '%qual%'
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
 
     local.execute("""
         DELETE FROM matches

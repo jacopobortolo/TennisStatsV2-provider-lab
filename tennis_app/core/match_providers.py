@@ -114,6 +114,20 @@ class SofaScoreMatchProvider(MatchProvider):
         "round of 32": "R32",
         "round of 64": "R64",
         "round of 128": "R128",
+        "qualification final": "Q2",
+        "qualifying final": "Q2",
+        "final qualifying round": "Q2",
+        "qualification round 2": "Q2",
+        "qualifying round 2": "Q2",
+        "qualification second round": "Q2",
+        "qualifying second round": "Q2",
+        "qualification round 1": "Q1",
+        "qualifying round 1": "Q1",
+        "qualification first round": "Q1",
+        "qualifying first round": "Q1",
+        "qualifications": "Q1",
+        "qualification": "Q1",
+        "qualifying": "Q1",
     }
     _SLAMS = {
         "australian open", "roland garros", "french open",
@@ -124,6 +138,17 @@ class SofaScoreMatchProvider(MatchProvider):
         "italian open", "canadian open", "toronto", "montreal",
         "cincinnati", "shanghai", "paris masters",
     }
+    _MASTERS_ALIAS_RULES = [
+        ("monte carlo", "Monte Carlo", "Monte Carlo Masters", "Monte Carlo"),
+        ("indian wells", "Indian Wells", "Indian Wells Masters", "Indian Wells"),
+        ("miami", "Miami", "Miami Masters", "Miami"),
+        ("madrid", "Madrid", "Madrid Masters", "WTA Madrid"),
+        ("rome", "Rome", "Rome Masters", "WTA Rome"),
+        ("italian open", "Rome", "Rome Masters", "WTA Rome"),
+        ("cincinnati", "Cincinnati", "Cincinnati Masters", "Cincinnati"),
+        ("shanghai", "Shanghai", "Shanghai Masters", "Shanghai"),
+        ("paris masters", "Paris", "Paris Masters", "Paris"),
+    ]
     _CLAY_EVENTS = {
         "monte carlo", "barcelona", "munich", "madrid", "rome",
         "italian open", "roland garros", "french open", "hamburg",
@@ -396,6 +421,10 @@ class SofaScoreMatchProvider(MatchProvider):
         text = self._norm(str(raw))
         if text in self._ROUND_MAP:
             return self._ROUND_MAP[text]
+        if "qual" in text:
+            if "final" in text or re.search(r"\b(?:2|2nd|second)\b", text):
+                return "Q2"
+            return "Q1"
         match = re.search(r"(\d+)", text)
         if "round" in text and match:
             return f"R{match.group(1)}"
@@ -446,16 +475,18 @@ class SofaScoreMatchProvider(MatchProvider):
             return "United Cup"
         if "delray beach" in label:
             return "Delray Beach"
-        if "monte carlo" in label:
-            return "Monte Carlo Masters"
-        if "indian wells" in label:
-            return "Indian Wells Masters" if tour == "atp" else "Indian Wells"
-        if "miami" in label:
-            return "Miami Masters" if tour == "atp" else "Miami"
-        if "madrid" in label:
-            return "WTA Madrid" if tour == "wta" else "Madrid Masters"
-        if "rome" in label or "italian open" in label:
-            return "WTA Rome" if tour == "wta" else "Rome Masters"
+        for pattern, city, atp_name, wta_name in self._MASTERS_ALIAS_RULES:
+            if pattern in label:
+                level = self._level_from_event(event, tour=tour)
+                if "challenger" in label or level == "C":
+                    return f"{city} CH"
+                if str(level).isdigit():
+                    return f"{'W' if tour == 'wta' else 'M'}{level} {city}"
+                if level == "M":
+                    return atp_name
+                if level in {"PM", "P", "W"}:
+                    return wta_name
+                return wta_name if tour == "wta" else city
         if "acapulco" in label:
             return "Acapulco"
         if "munich" in label:
@@ -489,6 +520,11 @@ class SofaScoreMatchProvider(MatchProvider):
         label = self._event_label(event)
         if any(slam in label for slam in self._SLAMS):
             return "G"
+        if "challenger" in label:
+            return "C"
+        itf_match = re.search(r"\b[wm](15|25|35|50|60|75|80|100|125)\b", label)
+        if itf_match:
+            return itf_match.group(1)
         if "masters" in label or "1000" in label or any(
                 name in label for name in self._MASTERS_NAMES):
             return "PM" if tour == "wta" else "M"
@@ -496,8 +532,6 @@ class SofaScoreMatchProvider(MatchProvider):
             return "F"
         if "davis" in label or "billie jean" in label:
             return "D"
-        if "challenger" in label:
-            return "C"
         if "olympic" in label:
             return "O"
         return LEVEL_MAP.get("A", "A") if tour == "atp" else "I"
