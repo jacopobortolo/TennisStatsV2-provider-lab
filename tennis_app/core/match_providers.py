@@ -22,6 +22,7 @@ import requests
 from .scraper import (
     LEVEL_MAP,
     TennisAbstractScraper,
+    clean_player_name,
     convert_scraped_to_db_format,
 )
 
@@ -174,34 +175,57 @@ class SofaScoreMatchProvider(MatchProvider):
     def _norm(text: str | None) -> str:
         return re.sub(r"\s+", " ", (text or "")).strip().lower()
 
+    @staticmethod
+    def _player_key(text: str | None) -> str:
+        if not text:
+            return ""
+        clean = clean_player_name(str(text)) or str(text)
+        return re.sub(r"\s+", " ", clean).strip().lower()
+
+    @classmethod
+    def _search_queries(cls, player_name: str) -> list[str]:
+        queries = []
+        for query in (player_name, clean_player_name(player_name)):
+            query = re.sub(r"\s+", " ", str(query or "")).strip()
+            if query and query not in queries:
+                queries.append(query)
+        return queries
+
     def search_players(self, player_name: str, tour: str = "atp") -> list[dict[str, Any]]:
         """Return candidate SofaScore tennis entities for a player name."""
-        query = quote(player_name)
         candidates: list[dict[str, Any]] = []
-        endpoints = (
-            f"/search/all?q={query}&page=0",
-            f"/search/teams?q={query}&page=0",
-        )
-        for endpoint in endpoints:
-            try:
-                payload = self._get_json(endpoint)
-            except Exception as exc:
-                logger.info("SofaScore search endpoint failed for %s: %s", endpoint, exc)
-                continue
-            for item in payload.get("results") or payload.get("teams") or []:
-                entity = item.get("entity") if isinstance(item, dict) else item
-                if not isinstance(entity, dict):
+        seen_ids = set()
+        for search_query in self._search_queries(player_name):
+            query = quote(search_query)
+            endpoints = (
+                f"/search/all?q={query}&page=0",
+                f"/search/teams?q={query}&page=0",
+            )
+            for endpoint in endpoints:
+                try:
+                    payload = self._get_json(endpoint)
+                except Exception as exc:
+                    logger.info("SofaScore search endpoint failed for %s: %s", endpoint, exc)
                     continue
-                sport = self._norm((entity.get("sport") or {}).get("name"))
-                if sport and sport != "tennis":
-                    continue
-                name = entity.get("name") or entity.get("shortName") or ""
-                if not name:
-                    continue
-                candidates.append(entity)
-        wanted = self._norm(player_name).replace("-", " ")
+                for item in payload.get("results") or payload.get("teams") or []:
+                    entity = item.get("entity") if isinstance(item, dict) else item
+                    if not isinstance(entity, dict):
+                        continue
+                    sport = self._norm((entity.get("sport") or {}).get("name"))
+                    if sport and sport != "tennis":
+                        continue
+                    name = entity.get("name") or entity.get("shortName") or ""
+                    if not name:
+                        continue
+                    entity_id = entity.get("id")
+                    dedupe_key = entity_id if entity_id is not None else name
+                    if dedupe_key in seen_ids:
+                        continue
+                    seen_ids.add(dedupe_key)
+                    candidates.append(entity)
+        wanted = self._player_key(player_name)
         candidates.sort(key=lambda item: (
-            self._norm(item.get("name")).replace("-", " ") != wanted,
+            self._player_key(item.get("name") or item.get("shortName")) != wanted,
             item.get("name") or "",
         ))
         return candidates
@@ -211,19 +235,26 @@ class SofaScoreMatchProvider(MatchProvider):
         candidates = self.search_players(player_name, tour=tour)
         if not candidates:
             return None, []
-        player = candidates[0]
-        player_id = player.get("id")
-        if not player_id:
-            return player, []
-        events: list[dict[str, Any]] = []
-        for page in range(max(1, pages)):
-            try:
-                payload = self._get_json(f"/team/{player_id}/events/last/{page}")
-            except Exception as exc:
-                logger.info("SofaScore events failed for %s page %s: %s", player_name, page, exc)
-                break
-            events.extend(payload.get("events") or [])
-        return player, events
+        last_player = candidates[0]
+        for player in candidates:
+            last_player = player
+            player_id = player.get("id")
+            if not player_id:
+                continue
+            events: list[dict[str, Any]] = []
+            for page in range(max(1, pages)):
+                try:
+                    payload = self._get_json(f"/team/{player_id}/events/last/{page}")
+                except Exception as exc:
+                    logger.info(
+                        "SofaScore events failed for %s candidate %s page %s: %s",
+                        player_name, player.get("name") or player_id, page, exc)
+                    events = []
+                    break
+                events.extend(payload.get("events") or [])
+            if events:
+                return player, events
+        return last_player, []
 
     def fetch_player_matches(
             self, player_name: str, min_year: int | None = None,

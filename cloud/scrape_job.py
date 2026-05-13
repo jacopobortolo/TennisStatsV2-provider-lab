@@ -146,6 +146,8 @@ def main(argv=None) -> int:
                         help="(legacy, no-op — top is already full)")
     parser.add_argument("--purge-empty-scrape-cache", action="store_true",
                         help="Delete zero-row negative scrape-cache entries")
+    parser.add_argument("--ignore-cache", action="store_true",
+                        help="Fetch all selected players regardless of scrape cache")
     parser.add_argument("--seed-players-only", action="store_true",
                         help="Only seed the players table, then exit")
     args = parser.parse_args(argv)
@@ -165,10 +167,10 @@ def main(argv=None) -> int:
     logger.info(
         "Cloud scrape: top_n=%d per tour, extended_budget=%d, "
         "inactive_extended_budget=%d, max_workers=%d, "
-        "max_matches_per_player=%d, match_provider=%s",
+        "max_matches_per_player=%d, match_provider=%s, ignore_cache=%s",
         top_n, args.extended_budget, args.inactive_extended_budget,
         args.max_workers, args.max_matches_per_player,
-        args.match_provider or "env/default",
+        args.match_provider or "env/default", args.ignore_cache,
     )
 
     db = RemoteTennisDatabase()
@@ -204,6 +206,7 @@ def main(argv=None) -> int:
                 max_matches_per_player=args.max_matches_per_player,
                 max_workers=args.max_workers,
                 match_provider=args.match_provider,
+                ignore_cache=args.ignore_cache,
                 return_report=True,
             )
             matches_df, rankings, scraped_names, match_report = scrape_result

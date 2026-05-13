@@ -793,7 +793,7 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
                                db=None, cache_expire_hours=6, min_year=None,
                                max_matches_per_player=20,
                                max_workers=8, return_report=False,
-                               match_provider=None):
+                               match_provider=None, ignore_cache=False):
     """
     Scrape matches for the top N ranked players.
 
@@ -804,6 +804,8 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
 
     If *db* is provided, uses the scrape cache to skip players whose
     data was scraped less than *cache_expire_hours* ago.
+    If *ignore_cache* is true, all selected players are fetched regardless
+    of scrape-cache freshness or activity fingerprint state.
     If *min_year* is set, only matches from that year onward are kept.
     If *max_matches_per_player* is set, only the N most recent matches
     per player are kept (default 20). Reduces import work since older
@@ -825,6 +827,7 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
         "tour": tour,
         "top_n": top_n,
         "match_provider": selected_match_provider,
+        "ignore_cache": bool(ignore_cache),
         "rankings": 0,
         "source": None,
         "stale": 0,
@@ -962,6 +965,13 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
         # completed-match signature; unconfirmed scrapes are not imported,
         # so the upcoming placeholder stays available for the next retry.
         has_due_upcoming = norm in due_upcoming
+
+        if ignore_cache:
+            stale.add(name)
+            stale_reasons[name] = "ignore_cache"
+            if fp is not None:
+                fingerprints[name] = fp
+            continue
 
         if fp is not None:
             # We have activity data from OFFICIAL
