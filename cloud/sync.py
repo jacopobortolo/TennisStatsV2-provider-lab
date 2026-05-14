@@ -131,6 +131,58 @@ def _copy_table(
     return total
 
 
+def _fix_numeric_wta_scraped_tour(local: sqlite3.Connection) -> int:
+    from tennis_app.core.database import _player_match_key
+
+    wta_names = set()
+    atp_names = set()
+    for first, last, tour in local.execute("""
+        SELECT name_first, name_last, tour
+        FROM players
+        WHERE tour IN ('atp', 'wta')
+    """):
+        full_name = f"{first or ''} {last or ''}".strip()
+        if not full_name:
+            continue
+        key = _player_match_key(full_name)
+        if tour == "wta":
+            wta_names.add(key)
+        else:
+            atp_names.add(key)
+
+    if not wta_names:
+        return 0
+
+    candidates = local.execute("""
+        SELECT DISTINCT winner_name, loser_name
+        FROM matches
+        WHERE tourney_id = 'SCRAPED'
+          AND tour = 'atp'
+          AND tourney_level GLOB '[0-9]*'
+          AND winner_name IS NOT NULL
+          AND loser_name IS NOT NULL
+    """).fetchall()
+
+    changed = 0
+    for winner_name, loser_name in candidates:
+        winner_key = _player_match_key(winner_name)
+        loser_key = _player_match_key(loser_name)
+        winner_is_wta = winner_key in wta_names and winner_key not in atp_names
+        loser_is_wta = loser_key in wta_names and loser_key not in atp_names
+        if winner_is_wta or loser_is_wta:
+            local.execute("""
+                UPDATE matches
+                SET tour = 'wta'
+                WHERE tourney_id = 'SCRAPED'
+                  AND tour = 'atp'
+                  AND tourney_level GLOB '[0-9]*'
+                  AND winner_name = ?
+                  AND loser_name = ?
+            """, (winner_name, loser_name))
+            changed += local.execute("SELECT changes()").fetchone()[0]
+    return changed
+
+
 def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
     aliases = [
         ("monte carlo", "Monte Carlo", "Monte Carlo Masters", "Monte Carlo"),
@@ -184,22 +236,7 @@ def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
     """)
     changed += local.execute("SELECT changes()").fetchone()[0]
 
-    local.execute("""
-        UPDATE matches
-        SET tour = 'wta'
-        WHERE tourney_id = 'SCRAPED'
-          AND tour = 'atp'
-          AND tourney_level GLOB '[0-9]*'
-          AND EXISTS (
-              SELECT 1
-              FROM players p
-              WHERE p.tour = 'wta'
-                AND (p.name_first || ' ' || p.name_last) IN (
-                    matches.winner_name, matches.loser_name
-                )
-          )
-    """)
-    changed += local.execute("SELECT changes()").fetchone()[0]
+    changed += _fix_numeric_wta_scraped_tour(local)
 
     local.execute("""
         UPDATE matches

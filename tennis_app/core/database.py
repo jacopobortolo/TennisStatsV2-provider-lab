@@ -3442,6 +3442,9 @@ class TennisDatabase:
 
     def _migrate_canonicalize_scraped_tourney_names(self, cur):
         """Normalize common live-provider tournament aliases in matches."""
+        if _is_remote_conn(self.conn):
+            return
+
         for pattern, city, atp_name, wta_name in _MASTERS_ALIAS_RULES:
             labels = {atp_name.lower(), wta_name.lower(), city.lower()}
             if pattern == "italian open":
@@ -3478,22 +3481,6 @@ class TennisDatabase:
                   'Cincinnati', 'Monte Carlo', 'Shanghai', 'Paris'
               )
               AND tourney_level IN ('PM', 'P', 'W')
-        """)
-
-        cur.execute("""
-            UPDATE matches
-            SET tour = 'wta'
-            WHERE tourney_id = 'SCRAPED'
-              AND tour = 'atp'
-              AND tourney_level GLOB '[0-9]*'
-              AND EXISTS (
-                  SELECT 1
-                  FROM players p
-                  WHERE p.tour = 'wta'
-                    AND (p.name_first || ' ' || p.name_last) IN (
-                        matches.winner_name, matches.loser_name
-                    )
-              )
         """)
 
         cur.execute("""
