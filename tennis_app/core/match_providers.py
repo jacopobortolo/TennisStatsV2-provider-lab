@@ -211,6 +211,11 @@ class SofaScoreMatchProvider(MatchProvider):
         return any(cls._label_has(label, phrase) for phrase in phrases)
 
     @staticmethod
+    def _strip_challenger_suffix(name: str) -> str:
+        return re.sub(r"\s+challenger\s*$", "", str(name or "").strip(),
+                      flags=re.IGNORECASE)
+
+    @staticmethod
     def _player_key(text: str | None) -> str:
         if not text:
             return ""
@@ -605,7 +610,9 @@ class SofaScoreMatchProvider(MatchProvider):
         if ", " in name:
             name = name.split(", ", 1)[0]
         level = self._level_from_event(event, tour=tour)
-        if level == "C" and not self._label_has(name, "CH"):
+        if level == "C" and str(tour).lower() == "atp":
+            name = self._strip_challenger_suffix(name)
+        if level == "C" and str(tour).lower() == "atp" and not self._label_has(name, "CH"):
             return f"{name} CH"
         return name
 
@@ -613,10 +620,16 @@ class SofaScoreMatchProvider(MatchProvider):
         for key in ("groundType", "courtType", "surface"):
             raw = event.get(key)
             if isinstance(raw, dict):
-                raw = raw.get("name")
+                raw = raw.get("name") or raw.get("slug")
             text = self._norm(str(raw or ""))
-            if text in {"hard", "clay", "grass", "carpet"}:
-                return text.capitalize()
+            if "clay" in text:
+                return "Clay"
+            if "grass" in text:
+                return "Grass"
+            if "hard" in text:
+                return "Hard"
+            if "carpet" in text:
+                return "Carpet"
         label = self._event_label(event)
         if self._label_has(label, "stuttgart"):
             return "Clay" if tour == "wta" else "Grass"

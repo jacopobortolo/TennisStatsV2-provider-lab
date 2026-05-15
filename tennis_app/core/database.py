@@ -86,6 +86,16 @@ _MASTERS_ALIAS_RULES = [
     ("paris masters", "Paris", "Paris Masters", "Paris"),
 ]
 
+_PLAYER_NAME_ALIASES = {
+    "jeffrey john wolf": "J J Wolf",
+}
+
+
+def _canonical_player_alias(name):
+    if not isinstance(name, str) or not name.strip():
+        return name
+    return _PLAYER_NAME_ALIASES.get(_player_match_key(name), name)
+
 
 def _canonical_live_event_name(city, atp_name, wta_name, tour=None, level=None):
     is_wta = str(tour or "").lower() == "wta"
@@ -107,6 +117,14 @@ def _label_has_phrase(label, phrase):
     return bool(phrase_key and f" {phrase_key} " in f" {label_key} ")
 
 
+def _canonical_atp_challenger_name(name):
+    value = re.sub(r"\s+challenger\s*$", "", str(name or "").strip(),
+                   flags=re.IGNORECASE)
+    if not _label_has_phrase(value, "CH"):
+        value = f"{value} CH"
+    return value
+
+
 def _canonical_scraped_tourney_name(name, tour=None, level=None):
     """Map common live-provider tournament labels to TennisAbstract names."""
     if not isinstance(name, str) or not name.strip():
@@ -114,12 +132,15 @@ def _canonical_scraped_tourney_name(name, tour=None, level=None):
     label = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
     label = re.sub(r"^(atp|wta)\s+", "", label).strip()
     level_text = str(level or "").strip().upper()
+    is_atp = str(tour or "").lower() == "atp"
     for pattern, city, atp_name, wta_name in _MASTERS_ALIAS_RULES:
         if _label_has_phrase(label, pattern):
             if _label_has_phrase(label, "challenger"):
                 return f"{city} CH"
             return _canonical_live_event_name(
                 city, atp_name, wta_name, tour=tour, level=level_text)
+    if is_atp and level_text == "C":
+        return _canonical_atp_challenger_name(name)
     return name.strip()
 
 
@@ -2478,7 +2499,8 @@ class TennisDatabase:
             if not isinstance(name, str):
                 return name
             name = _strip_player_seed_marker(name)
-            return _strip_diacritics(name).replace("-", " ")
+            name = _strip_diacritics(name).replace("-", " ")
+            return _canonical_player_alias(name)
 
         matches_df = matches_df.copy()
         for col in ("winner_name", "loser_name"):
@@ -2532,6 +2554,7 @@ class TennisDatabase:
         def _canonicalize(name):
             if not isinstance(name, str) or not name:
                 return name
+            name = _canonical_player_alias(name)
             key = _player_match_key(name)
             if key in canonical_name_by_key:
                 return canonical_name_by_key[key]
@@ -2728,6 +2751,52 @@ class TennisDatabase:
         )
         try:
             matches_df.to_sql(staging_name, self.conn, if_exists="replace", index=False)
+            self.conn.execute(f"""
+                UPDATE {staging_name} AS sf
+                SET surface = (
+                    SELECT MIN(ref.surface)
+                    FROM matches ref
+                    WHERE ref.tourney_id = 'SCRAPED'
+                      AND ref.scrape_provider = 'tennisabstract'
+                      AND ref.tour = sf.tour
+                      AND SUBSTR(ref.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                      AND ref.tourney_name = sf.tourney_name
+                      AND COALESCE(ref.surface, '') != ''
+                )
+                WHERE sf.scrape_provider = 'sofascore'
+                  AND (
+                    SELECT COUNT(DISTINCT ref.surface)
+                    FROM matches ref
+                    WHERE ref.tourney_id = 'SCRAPED'
+                      AND ref.scrape_provider = 'tennisabstract'
+                      AND ref.tour = sf.tour
+                      AND SUBSTR(ref.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                      AND ref.tourney_name = sf.tourney_name
+                      AND COALESCE(ref.surface, '') != ''
+                  ) = 1
+            """)
+            self.conn.execute(f"""
+                UPDATE {staging_name} AS sf
+                SET surface = (
+                    SELECT MIN(ref.surface)
+                    FROM matches ref
+                    WHERE ref.tourney_id = 'SCRAPED'
+                      AND ref.scrape_provider = 'tennisabstract'
+                      AND ref.tour = sf.tour
+                      AND ref.tourney_name = sf.tourney_name
+                      AND COALESCE(ref.surface, '') != ''
+                )
+                WHERE sf.scrape_provider = 'sofascore'
+                  AND (
+                    SELECT COUNT(DISTINCT ref.surface)
+                    FROM matches ref
+                    WHERE ref.tourney_id = 'SCRAPED'
+                      AND ref.scrape_provider = 'tennisabstract'
+                      AND ref.tour = sf.tour
+                      AND ref.tourney_name = sf.tourney_name
+                      AND COALESCE(ref.surface, '') != ''
+                  ) = 1
+            """)
             self.conn.execute(f"""
                 DELETE FROM {staging_name}
                 WHERE rowid IN (

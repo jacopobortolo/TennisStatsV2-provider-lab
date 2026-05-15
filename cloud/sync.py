@@ -277,6 +277,77 @@ def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
     changed += local.execute("SELECT changes()").fetchone()[0]
 
     local.execute("""
+        UPDATE matches
+        SET tourney_name = TRIM(SUBSTR(
+            tourney_name, 1, LENGTH(tourney_name) - LENGTH(' Challenger'))
+        ) || ' CH'
+        WHERE tourney_id = 'SCRAPED'
+          AND tour = 'atp'
+          AND tourney_level = 'C'
+          AND LOWER(tourney_name) LIKE '% challenger'
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        UPDATE matches
+        SET tourney_name = tourney_name || ' CH'
+        WHERE tourney_id = 'SCRAPED'
+          AND tour = 'atp'
+          AND tourney_level = 'C'
+          AND LOWER(tourney_name) NOT LIKE '% ch'
+          AND LOWER(tourney_name) NOT LIKE '% challenger'
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        UPDATE matches AS sf
+        SET surface = (
+            SELECT MIN(ref.surface)
+            FROM matches ref
+            WHERE ref.tourney_id = 'SCRAPED'
+              AND ref.scrape_provider = 'tennisabstract'
+              AND ref.tour = sf.tour
+              AND SUBSTR(ref.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+              AND ref.tourney_name = sf.tourney_name
+              AND COALESCE(ref.surface, '') != ''
+        )
+        WHERE sf.tourney_id = 'SCRAPED'
+          AND sf.scrape_provider = 'sofascore'
+          AND COALESCE(sf.surface, '') != ''
+          AND (
+            SELECT COUNT(DISTINCT ref.surface)
+            FROM matches ref
+            WHERE ref.tourney_id = 'SCRAPED'
+              AND ref.scrape_provider = 'tennisabstract'
+              AND ref.tour = sf.tour
+              AND SUBSTR(ref.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+              AND ref.tourney_name = sf.tourney_name
+              AND COALESCE(ref.surface, '') != ''
+          ) = 1
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        DELETE FROM matches
+        WHERE rowid IN (
+            SELECT sf.rowid
+            FROM matches sf
+            JOIN matches ta
+              ON ta.tourney_id = 'SCRAPED'
+             AND sf.tourney_id = 'SCRAPED'
+             AND ta.scrape_provider = 'tennisabstract'
+             AND sf.scrape_provider = 'sofascore'
+             AND ta.tour = sf.tour
+             AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+             AND ta.tourney_name = sf.tourney_name
+             AND ta.round = sf.round
+             AND ta.winner_name = sf.winner_name
+             AND ta.loser_name = sf.loser_name
+        )
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
         DELETE FROM matches
         WHERE rowid IN (
             SELECT other.rowid
@@ -325,6 +396,31 @@ def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
         END
         WHERE tourney_id = 'SCRAPED'
           AND LOWER(COALESCE(round, '')) LIKE '%qual%'
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        UPDATE matches AS sf
+        SET surface = (
+            SELECT MIN(ref.surface)
+            FROM matches ref
+            WHERE ref.tourney_id = 'SCRAPED'
+              AND ref.scrape_provider = 'tennisabstract'
+              AND ref.tour = sf.tour
+              AND ref.tourney_name = sf.tourney_name
+              AND COALESCE(ref.surface, '') != ''
+        )
+        WHERE sf.tourney_id = 'SCRAPED'
+          AND sf.scrape_provider = 'sofascore'
+          AND (
+            SELECT COUNT(DISTINCT ref.surface)
+            FROM matches ref
+            WHERE ref.tourney_id = 'SCRAPED'
+              AND ref.scrape_provider = 'tennisabstract'
+              AND ref.tour = sf.tour
+              AND ref.tourney_name = sf.tourney_name
+              AND COALESCE(ref.surface, '') != ''
+          ) = 1
     """)
     changed += local.execute("SELECT changes()").fetchone()[0]
 
