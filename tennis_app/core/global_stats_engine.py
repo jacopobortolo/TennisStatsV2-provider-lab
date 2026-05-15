@@ -1238,6 +1238,132 @@ class GlobalStatsEngine:
     def _stat_win_streak_by_surface(self, filters, limit):
         return self._win_streak(filters, limit, group_attr="surface")
 
+    def _stat_no_break_win_streak(self, filters, limit):
+        """Longest win streak where every win has complete stats and zero breaks conceded."""
+        where, params = self._where(filters)
+        rows = self._query(f"""
+            WITH player_matches AS (
+                SELECT id, winner_name AS player, 1 AS won, tourney_date,
+                       tourney_name, tourney_level, surface, round, score,
+                       CASE
+                           WHEN w_bpFaced IS NOT NULL
+                            AND w_bpSaved IS NOT NULL
+                            AND w_SvGms IS NOT NULL
+                           THEN CAST(w_bpFaced AS REAL) - CAST(w_bpSaved AS REAL)
+                           ELSE NULL
+                       END AS breaks_conceded,
+                       CASE
+                           WHEN w_bpFaced IS NOT NULL
+                            AND w_bpSaved IS NOT NULL
+                            AND w_SvGms IS NOT NULL
+                           THEN CAST(w_SvGms AS REAL)
+                              - (CAST(w_bpFaced AS REAL) - CAST(w_bpSaved AS REAL))
+                           ELSE NULL
+                       END AS service_holds
+                FROM matches m
+                WHERE {where} AND winner_name IS NOT NULL AND winner_name != ''
+                UNION ALL
+                SELECT id, loser_name AS player, 0 AS won, tourney_date,
+                       tourney_name, tourney_level, surface, round, score,
+                       NULL AS breaks_conceded, NULL AS service_holds
+                FROM matches m
+                WHERE {where} AND loser_name IS NOT NULL AND loser_name != ''
+            )
+            SELECT id, player, won, tourney_date, tourney_name, tourney_level,
+                   surface, round, score, breaks_conceded, service_holds
+            FROM player_matches
+            ORDER BY player, tourney_date, tourney_name,
+                     CASE round
+                         WHEN 'Q1' THEN 1 WHEN 'Q2' THEN 2 WHEN 'Q3' THEN 3
+                         WHEN 'R128' THEN 4 WHEN 'R64' THEN 5 WHEN 'R32' THEN 6
+                         WHEN 'R16' THEN 7 WHEN 'QF' THEN 8 WHEN 'SF' THEN 9
+                         WHEN 'F' THEN 10 ELSE 11 END,
+                     id
+        """, params + params)
+
+        by_player = defaultdict(list)
+        for row in rows:
+            by_player[row["player"]].append(row)
+
+        full_results = []
+        for player, matches in by_player.items():
+            current = 0
+            current_start = current_end = None
+            streak_sw = streak_sl = 0
+            service_holds = 0
+            match_ids = []
+
+            def flush_current():
+                if current <= 0:
+                    return
+                first_year = self._date_year(current_start["tourney_date"] if current_start else "")
+                last_year = self._date_year(current_end["tourney_date"] if current_end else "")
+                full_results.append((
+                    player, current, f"{first_year}-{last_year}",
+                    current_start["tourney_date"] if current_start else "",
+                    current_end["tourney_date"] if current_end else "",
+                    service_holds, streak_sw, streak_sl, list(match_ids),
+                ))
+
+            for match in matches:
+                score_text = match.get("score") or ""
+                breaks_conceded = match.get("breaks_conceded")
+                holds = match.get("service_holds")
+                valid_no_break_win = (
+                    bool(match["won"])
+                    and "W/O" not in score_text
+                    and breaks_conceded is not None
+                    and holds is not None
+                    and float(breaks_conceded) == 0.0
+                    and float(holds) >= 0.0
+                )
+                if valid_no_break_win:
+                    if current == 0:
+                        current_start = match
+                    current += 1
+                    current_end = match
+                    service_holds += int(round(float(holds)))
+                    match_ids.append(match["id"])
+                    parsed = parse_score(score_text)
+                    if parsed:
+                        streak_sw += parsed["sets_won"]
+                        streak_sl += parsed["sets_lost"]
+                else:
+                    flush_current()
+                    current = 0
+                    current_start = current_end = None
+                    streak_sw = streak_sl = 0
+                    service_holds = 0
+                    match_ids = []
+            flush_current()
+
+        full_results.sort(key=lambda r: (-r[1], -r[5], r[0]))
+        full_results = full_results[:limit]
+
+        ranked_rows = []
+        for i, row in enumerate(full_results, 1):
+            sets_str = f"{row[6]}-{row[7]}" if (row[6] or row[7]) else ""
+            ranked_rows.append([
+                str(i), row[0], str(row[1]), row[2], str(row[5]), sets_str,
+            ])
+
+        streaks_meta = [
+            {
+                "player": row[0],
+                "start_date": row[3],
+                "end_date": row[4],
+                "streak_type": "no_break_win",
+                "match_ids": row[8],
+            }
+            for row in full_results
+        ]
+        return {
+            "columns": ["Rank", "Player", "Wins", "Period", "Service Holds", "Sets W-L"],
+            "rows": ranked_rows,
+            "streaks_meta": streaks_meta,
+            "note": "",
+        }
+
     def _stat_loss_streak_overall(self, filters, limit):
         """Longest consecutive loss streak across all matches."""
         where, params = self._where(filters)
@@ -1474,6 +1600,48 @@ class GlobalStatsEngine:
                          WHEN 'F' THEN 10 ELSE 11 END
         """
         return self._query(sql, bind)
+
+    def get_no_break_streak_matches(self, player, start_date, end_date, filters,
+                                    match_ids=None):
+        """Return the exact wins forming a no-break win streak."""
+        where, params = self._where(filters)
+        id_clause = ""
+        id_params = []
+        if match_ids:
+            placeholders = ",".join("?" for _ in match_ids)
+            id_clause = f"AND m.id IN ({placeholders})"
+            id_params = list(match_ids)
+        sql = f"""
+            SELECT tourney_date, tourney_name, tourney_level, surface, round,
+                   loser_name AS opponent, score,
+                   CAST(w_bpFaced AS REAL) - CAST(w_bpSaved AS REAL) AS breaks_conceded,
+                   CAST(w_SvGms AS REAL)
+                     - (CAST(w_bpFaced AS REAL) - CAST(w_bpSaved AS REAL)) AS service_holds,
+                   w_SvGms AS service_games,
+                   w_bpFaced AS bp_faced,
+                   w_bpSaved AS bp_saved
+            FROM matches m
+            WHERE {where}
+              AND winner_name = ?
+              AND tourney_date >= ? AND tourney_date <= ?
+              AND score NOT LIKE '%W/O%'
+              AND w_bpFaced IS NOT NULL
+              AND w_bpSaved IS NOT NULL
+              AND w_SvGms IS NOT NULL
+              AND CAST(w_bpFaced AS REAL) - CAST(w_bpSaved AS REAL) = 0
+              {id_clause}
+            ORDER BY tourney_date,
+                     CASE round
+                         WHEN 'Q1' THEN 1 WHEN 'Q2' THEN 2 WHEN 'Q3' THEN 3
+                         WHEN 'R128' THEN 4 WHEN 'R64' THEN 5 WHEN 'R32' THEN 6
+                         WHEN 'R16' THEN 7 WHEN 'QF' THEN 8 WHEN 'SF' THEN 9
+                         WHEN 'F' THEN 10 ELSE 11 END,
+                     id
+        """
+        return self._query(
+            sql,
+            params + [player, start_date, end_date] + id_params,
+        )
 
     def _stat_round_streak_slam_sf_f(self, filters, limit):
         # Threshold is always SF — ignore the round pill so it can't accidentally

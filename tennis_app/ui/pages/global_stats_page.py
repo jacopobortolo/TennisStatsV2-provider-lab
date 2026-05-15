@@ -131,6 +131,10 @@ STAT_CATALOG = [
           "Serie piu lunga di vittorie consecutive su una superficie.",
           "player, surface, tournament_level, season, era",
           "apply surface filter before streak calculation"),
+        _stat("no_break_win_streak", "Consecutive wins without breaks", "streaks", "all_time",
+            "Striscia piu lunga di vittorie consecutive senza subire break, con totale dei turni di servizio tenuti.",
+            "player, tournament_level, surface, season, era",
+            "order matches by date; increment on wins with complete BP/service stats and zero breaks conceded"),
     _stat("loss_streak_overall", "Longest loss streak", "streaks", "all_time",
           "Striscia piu lunga di sconfitte consecutive in partite ATP/WTA.",
           "player, tournament_level, surface, season, era",
@@ -902,6 +906,16 @@ class GlobalStatsPage(QWidget):
                 set_indexes=meta.get("set_indexes"),
             )
             dlg = _SetStreakDetailDialog(title, matches, parent=self)
+        elif streak_type == "no_break_win":
+            title = f"{player} — {streak_len} wins without breaks  ({detail})"
+            matches = GlobalStatsEngine(self.db).get_no_break_streak_matches(
+                player=meta["player"],
+                start_date=meta["start_date"],
+                end_date=meta["end_date"],
+                filters=self._current_filters(),
+                match_ids=meta.get("match_ids"),
+            )
+            dlg = _WinStreakDetailDialog(title, matches, parent=self)
         elif meta.get("group_attr") == "same_country":
             title = f"{player} — {streak_len} wins vs same country  ({detail})"
             matches = GlobalStatsEngine(self.db).get_same_country_streak_matches(
@@ -1120,11 +1134,19 @@ class _WinStreakDetailDialog(QDialog):
                     f"  [{breaks_conceded} break{'s' if breaks_conceded > 1 else ''} subito]"
                     if breaks_conceded else ""
                 )
+                service_holds = m.get("service_holds")
+                holds_str = ""
+                if service_holds is not None and service_holds != "":
+                    try:
+                        holds_count = int(round(float(service_holds)))
+                        holds_str = f"  [{holds_count} service holds]"
+                    except (TypeError, ValueError):
+                        holds_str = ""
                 parts = [tourney, rnd, f"vs {opponent}" if opponent else "",
                          sets_display or score_str]
                 line_text = (
                     f"{i}.  {date}  —  "
-                    f"{',  '.join(p for p in parts if p)}{breaks_str}"
+                    f"{',  '.join(p for p in parts if p)}{breaks_str}{holds_str}"
                 )
 
                 lbl = QLabel(line_text)
@@ -1152,7 +1174,7 @@ class _WinStreakDetailDialog(QDialog):
         scroll.setWidget(inner)
         layout.addWidget(scroll, 1)
 
-        legend = QLabel("✓ set vinto · ✗ set perso (rosso) · arancione = break subiti (senza set persi)")
+        legend = QLabel("✓ set vinto · ✗ set perso (rosso) · arancione = break subiti (senza set persi) · service holds quando disponibili")
         legend.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 8pt;")
         layout.addWidget(legend)
 
