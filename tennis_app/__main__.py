@@ -92,6 +92,9 @@ def _run_cloud_sync(splash, app):
 
 def _warm_up_webengine(app):
     """Initialize QWebEngine and Plotly before the first chart is shown."""
+    if os.environ.get("TENNIS_WEBENGINE_WARMUP", "1").strip() != "1":
+        logger.debug("QWebEngine warm-up skipped")
+        return None
     try:
         from PySide6.QtCore import Qt
         from PySide6.QtWebEngineWidgets import QWebEngineView

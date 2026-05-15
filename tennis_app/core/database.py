@@ -710,17 +710,6 @@ class TennisDatabase:
                 "Failed to prune scraped provider duplicates "
                 "(non-fatal, will retry on next start)")
 
-        # One-shot migration: after canonicalizing scraped player names, fill
-        # missing id/IOC/rank metadata from players/rankings.  This repairs rows
-        # that were imported while a provider used a slightly different display
-        # name, e.g. SofaScore "Martin Damm Jr" vs DB "Martin Damm".
-        try:
-            self._migrate_backfill_scraped_player_metadata(cur)
-        except Exception:
-            logger.exception(
-                "Failed to backfill scraped player metadata "
-                "(non-fatal, will retry on next start)")
-
         # One-shot migration: fix scraped WTA matches stored with tour='atp'.
         # Uses the players table (which is correctly split by tour) to detect
         # WTA-only names and updates the tour field accordingly.
@@ -827,6 +816,18 @@ class TennisDatabase:
                 logger.info("Duplicate cleanup complete.")
             except Exception as exc:
                 logger.warning("Duplicate cleanup failed: %s", exc)
+        if version < 5:
+            # After canonicalizing scraped player names, fill missing id/IOC/rank
+            # metadata from players/rankings.  This repairs rows imported while a
+            # provider used a slightly different display name, e.g. SofaScore
+            # "Martin Damm Jr" vs DB "Martin Damm".
+            logger.info("Backfilling scraped player metadata (version 5)...")
+            try:
+                self._migrate_backfill_scraped_player_metadata(self.conn.cursor())
+                self.conn.execute("PRAGMA user_version = 5")
+                self.conn.commit()
+            except Exception as exc:
+                logger.warning("Scraped player metadata backfill failed: %s", exc)
 
     def has_data(self, tour="atp"):
         """Return True if this tour already has matches imported."""

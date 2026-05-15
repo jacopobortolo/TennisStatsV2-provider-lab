@@ -69,18 +69,33 @@ def _local_columns(local: sqlite3.Connection, table: str) -> list[str]:
     return [r[1] for r in cur.fetchall()]
 
 
-def _stream_rows(client, sql: str, params: list, page: int = 5000):
-    """Yield (columns, rows_chunk) pages from a remote SELECT."""
-    offset = 0
+def _stream_table_rows(
+    client,
+    table: str,
+    cols: list[str],
+    where: Optional[str] = None,
+    params: Optional[list] = None,
+    page: int = 5000,
+):
+    """Yield remote table rows using keyset pagination over rowid."""
+    params = list(params or [])
+    col_csv = ", ".join(cols)
+    where_sql = f"({where}) AND " if where else ""
+    last_rowid = 0
     while True:
-        paged_sql = f"{sql} LIMIT ? OFFSET ?"
-        rs = client.execute(paged_sql, params + [page, offset])
+        paged_sql = (
+            f"SELECT rowid, {col_csv} FROM {table} "
+            f"WHERE {where_sql}rowid > ? "
+            "ORDER BY rowid LIMIT ?"
+        )
+        rs = client.execute(paged_sql, params + [last_rowid, page])
         if not rs.rows:
             return
-        yield rs.columns, [tuple(r) for r in rs.rows]
-        if len(rs.rows) < page:
+        rows = [tuple(r) for r in rs.rows]
+        last_rowid = rows[-1][0]
+        yield cols, [r[1:] for r in rows]
+        if len(rows) < page:
             return
-        offset += page
 
 
 def _copy_table(
@@ -106,10 +121,7 @@ def _copy_table(
     if not cols:
         return 0
 
-    sel_sql = f"SELECT {', '.join(cols)} FROM {table}"
     sel_params: list = []
-    if where:
-        sel_sql += f" WHERE {where}"
 
     if delete_local:
         if where:
@@ -122,7 +134,7 @@ def _copy_table(
     insert_sql = f"{verb} INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
 
     total = 0
-    for _, page_rows in _stream_rows(client, sel_sql, sel_params):
+    for _, page_rows in _stream_table_rows(client, table, cols, where, sel_params):
         local.executemany(insert_sql, page_rows)
         total += len(page_rows)
         if progress_callback:
