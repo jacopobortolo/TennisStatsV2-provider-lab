@@ -533,7 +533,7 @@ class SofaScoreMatchProvider(MatchProvider):
         round_info = event.get("roundInfo") or {}
         raw = round_info.get("name") or round_info.get("round") or ""
         text = self._norm(str(raw))
-        label = self._event_label(event)
+        label = self._tournament_label(event)
         is_qualifying_event = self._label_has_any(
             label, ("qualifying", "qualification"))
         if "qual" in text or is_qualifying_event:
@@ -584,7 +584,7 @@ class SofaScoreMatchProvider(MatchProvider):
 
     def _is_doubles_event(self, event: dict[str, Any], home: dict[str, Any],
                           away: dict[str, Any], tourney_name: str) -> bool:
-        label = self._event_label(event)
+        label = self._tournament_label(event)
         if self._label_has(label, "doubles") or self._label_has(tourney_name, "doubles"):
             return True
         names = [
@@ -595,7 +595,7 @@ class SofaScoreMatchProvider(MatchProvider):
 
     def _canonical_tourney_name(self, name: str, event: dict[str, Any],
                                 tour: str = "atp") -> str:
-        label = self._event_label(event)
+        label = self._tournament_label(event)
         if self._label_has(label, "united cup"):
             return "United Cup"
         if self._label_has(label, "delray beach"):
@@ -641,7 +641,7 @@ class SofaScoreMatchProvider(MatchProvider):
                 return "Hard"
             if "carpet" in text:
                 return "Carpet"
-        label = self._event_label(event)
+        label = self._tournament_label(event)
         if self._label_has(label, "stuttgart"):
             return "Clay" if tour == "wta" else "Grass"
         if self._label_has_any(label, self._CLAY_EVENTS):
@@ -653,7 +653,7 @@ class SofaScoreMatchProvider(MatchProvider):
         return ""
 
     def _level_from_event(self, event: dict[str, Any], tour: str = "atp") -> str:
-        label = self._event_label(event)
+        label = self._tournament_label(event)
         if self._label_has_any(label, self._SLAMS):
             return "G"
         if self._label_has(label, "challenger"):
@@ -673,16 +673,24 @@ class SofaScoreMatchProvider(MatchProvider):
         return LEVEL_MAP.get("A", "A") if tour == "atp" else "I"
 
     def _event_label(self, event: dict[str, Any]) -> str:
+        label_parts = self._tournament_label_parts(event)
+        label_parts.append(str(event.get("slug") or ""))
+        return self._norm(" ".join(label_parts))
+
+    def _tournament_label(self, event: dict[str, Any]) -> str:
+        return self._norm(" ".join(self._tournament_label_parts(event)))
+
+    @staticmethod
+    def _tournament_label_parts(event: dict[str, Any]) -> list[str]:
         tournament = event.get("tournament") or {}
         unique_tournament = event.get("uniqueTournament") or {}
         nested_unique = tournament.get("uniqueTournament") or {}
-        return self._norm(" ".join([
+        return [
             str(tournament.get("name") or ""),
             str(unique_tournament.get("name") or ""),
             str(nested_unique.get("name") or ""),
             str((tournament.get("category") or {}).get("name") or ""),
-            str(event.get("slug") or ""),
-        ]))
+        ]
 
     @staticmethod
     def _rank_from_team(team: dict[str, Any]) -> float | None:

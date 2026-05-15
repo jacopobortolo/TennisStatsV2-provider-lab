@@ -488,6 +488,30 @@ def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
         )
     """)
     changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        DELETE FROM matches
+        WHERE rowid IN (
+            SELECT sf.rowid
+            FROM matches sf
+            JOIN matches ta
+              ON ta.tourney_id = 'SCRAPED'
+             AND sf.tourney_id = 'SCRAPED'
+             AND ta.scrape_provider = 'tennisabstract'
+             AND sf.scrape_provider = 'sofascore'
+             AND ta.tour = sf.tour
+             AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+             AND ta.winner_name = sf.winner_name
+             AND ta.loser_name = sf.loser_name
+             AND ta.round = sf.round
+             AND ta.tourney_name != sf.tourney_name
+             AND ABS(
+                CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
+                - CAST(ta.tourney_date AS INTEGER)
+             ) <= 7
+        )
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
     return changed
 
 
