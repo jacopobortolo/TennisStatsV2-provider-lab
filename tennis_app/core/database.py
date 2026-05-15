@@ -144,7 +144,15 @@ def _canonical_scraped_tourney_name(name, tour=None, level=None):
     return name.strip()
 
 
-def _canonical_scraped_round(round_name):
+def _sofascore_round_from_ordinal(ordinal):
+    if ordinal == 1:
+        return "Q1"
+    if ordinal == 2:
+        return "Q2"
+    return None
+
+
+def _canonical_scraped_round(round_name, level=None, provider=None):
     """Normalize live-provider qualifying labels to DB round codes."""
     if not isinstance(round_name, str) or not round_name.strip():
         return round_name
@@ -156,6 +164,17 @@ def _canonical_scraped_round(round_name):
         if "final" in label or re.search(r"\b(?:2|2nd|second)\b", label):
             return "Q2"
         return "Q1"
+    is_sofascore = str(provider or "").strip().lower() == "sofascore"
+    if is_sofascore and re.fullmatch(r"R[12]", raw.upper()):
+        mapped = _sofascore_round_from_ordinal(int(raw[1:]))
+        if mapped:
+            return mapped
+    ordinal = re.search(r"\b(\d+)(?:st|nd|rd|th)?\s+round\b", label)
+    if ordinal:
+        mapped = (_sofascore_round_from_ordinal(int(ordinal.group(1)))
+                  if is_sofascore else None)
+        if mapped:
+            return mapped
     return raw
 
 
@@ -1798,8 +1817,8 @@ class TennisDatabase:
         conditions = []
         params = []
         if tourney_name:
-            conditions.append("tourney_name LIKE ?")
-            params.append(f"%{tourney_name}%")
+            conditions.append("tourney_name = ?")
+            params.append(tourney_name)
         if year:
             conditions.append("tourney_date BETWEEN ? AND ?")
             params.extend([f"{year}0000", f"{year}9999"])
@@ -1838,8 +1857,8 @@ class TennisDatabase:
         conditions = []
         params = []
         if tourney_name:
-            conditions.append("tourney_name LIKE ?")
-            params.append(f"%{tourney_name}%")
+            conditions.append("tourney_name = ?")
+            params.append(tourney_name)
         if year:
             conditions.append("tourney_date BETWEEN ? AND ?")
             params.extend([f"{year}0000", f"{year}9999"])
@@ -2513,8 +2532,11 @@ class TennisDatabase:
                     row.get("tourney_level"))
             matches_df["tourney_name"] = matches_df.apply(_canon_row, axis=1)
         if "round" in matches_df.columns:
-            matches_df["round"] = matches_df["round"].apply(
-                _canonical_scraped_round)
+            def _canon_round_row(row):
+                return _canonical_scraped_round(
+                    row.get("round"), row.get("tourney_level"),
+                    row.get("scrape_provider"))
+            matches_df["round"] = matches_df.apply(_canon_round_row, axis=1)
 
         # Build a name→id and name→ioc cache from existing players.
         # Filter by tour when possible to halve the rows read on remote
@@ -2812,7 +2834,6 @@ class TennisDatabase:
                      AND canonical.tourney_name = other.tourney_name
                      AND canonical.winner_name = other.winner_name
                      AND canonical.loser_name = other.loser_name
-                     AND COALESCE(canonical.score, '') = COALESCE(other.score, '')
                      AND (
                         (other.round = 'R1' AND canonical.round = 'Q1')
                         OR (other.round = 'R2' AND canonical.round = 'Q2')
@@ -2836,12 +2857,72 @@ class TennisDatabase:
                      AND canonical.tourney_name = other.tourney_name
                      AND canonical.winner_name = other.winner_name
                      AND canonical.loser_name = other.loser_name
-                     AND COALESCE(canonical.score, '') = COALESCE(other.score, '')
                      AND (
                         (other.round = 'R1' AND canonical.round = 'Q1')
                         OR (other.round = 'R2' AND canonical.round = 'Q2')
                         OR LOWER(COALESCE(other.round, '')) LIKE '%qual%'
                      )
+                )
+            """)
+            self.conn.execute(f"""
+                DELETE FROM {staging_name}
+                WHERE rowid IN (
+                    SELECT sf.rowid
+                    FROM {staging_name} sf
+                    JOIN matches ta
+                      ON ta.tourney_id = 'SCRAPED'
+                     AND ta.scrape_provider = 'tennisabstract'
+                     AND sf.scrape_provider = 'sofascore'
+                     AND COALESCE(ta.tour, '') = COALESCE(sf.tour, '')
+                     AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                     AND ta.winner_name = sf.winner_name
+                     AND ta.loser_name = sf.loser_name
+                     AND (
+                        (sf.round = 'R1' AND ta.round = 'Q1')
+                        OR (sf.round = 'R2' AND ta.round = 'Q2')
+                     )
+                     AND (
+                        COALESCE(ta.score, '') = COALESCE(sf.score, '')
+                        OR ta.score LIKE COALESCE(sf.score, '') || '%'
+                        OR sf.score LIKE COALESCE(ta.score, '') || '%'
+                     )
+                     AND ABS(
+                        CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
+                        - CAST(ta.tourney_date AS INTEGER)
+                     ) <= 3
+                    WHERE ta.tourney_name = sf.tourney_name
+                       OR ta.tourney_level != sf.tourney_level
+                )
+            """)
+            self.conn.execute("""
+                DELETE FROM matches
+                WHERE rowid IN (
+                    SELECT sf.rowid
+                    FROM matches sf
+                    JOIN matches ta
+                      ON ta.tourney_id = 'SCRAPED'
+                     AND sf.tourney_id = 'SCRAPED'
+                     AND ta.scrape_provider = 'tennisabstract'
+                     AND sf.scrape_provider = 'sofascore'
+                     AND ta.tour = sf.tour
+                     AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                     AND ta.winner_name = sf.winner_name
+                     AND ta.loser_name = sf.loser_name
+                     AND (
+                        (sf.round = 'R1' AND ta.round = 'Q1')
+                        OR (sf.round = 'R2' AND ta.round = 'Q2')
+                     )
+                     AND (
+                        COALESCE(ta.score, '') = COALESCE(sf.score, '')
+                        OR ta.score LIKE COALESCE(sf.score, '') || '%'
+                        OR sf.score LIKE COALESCE(ta.score, '') || '%'
+                     )
+                     AND ABS(
+                        CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
+                        - CAST(ta.tourney_date AS INTEGER)
+                     ) <= 3
+                    WHERE ta.tourney_name = sf.tourney_name
+                       OR ta.tourney_level != sf.tourney_level
                 )
             """)
             self.conn.execute(f"""

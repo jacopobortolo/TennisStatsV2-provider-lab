@@ -363,7 +363,6 @@ def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
              AND canonical.tourney_name = other.tourney_name
              AND canonical.winner_name = other.winner_name
              AND canonical.loser_name = other.loser_name
-             AND COALESCE(canonical.score, '') = COALESCE(other.score, '')
              AND (
                 LOWER(COALESCE(other.round, '')) IN (
                     'qualification', 'qualifications',
@@ -374,6 +373,39 @@ def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
                 OR (other.round = 'R1' AND canonical.round = 'Q1')
                 OR (other.round = 'R2' AND canonical.round = 'Q2')
              )
+        )
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        DELETE FROM matches
+        WHERE rowid IN (
+            SELECT sf.rowid
+            FROM matches sf
+            JOIN matches ta
+              ON ta.tourney_id = 'SCRAPED'
+             AND sf.tourney_id = 'SCRAPED'
+             AND ta.scrape_provider = 'tennisabstract'
+             AND sf.scrape_provider = 'sofascore'
+             AND ta.tour = sf.tour
+             AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+             AND ta.winner_name = sf.winner_name
+             AND ta.loser_name = sf.loser_name
+             AND (
+                (sf.round = 'R1' AND ta.round = 'Q1')
+                OR (sf.round = 'R2' AND ta.round = 'Q2')
+             )
+             AND (
+                COALESCE(ta.score, '') = COALESCE(sf.score, '')
+                OR ta.score LIKE COALESCE(sf.score, '') || '%'
+                OR sf.score LIKE COALESCE(ta.score, '') || '%'
+             )
+             AND ABS(
+                CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
+                - CAST(ta.tourney_date AS INTEGER)
+             ) <= 3
+            WHERE ta.tourney_name = sf.tourney_name
+               OR ta.tourney_level != sf.tourney_level
         )
     """)
     changed += local.execute("SELECT changes()").fetchone()[0]
@@ -396,6 +428,19 @@ def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
         END
         WHERE tourney_id = 'SCRAPED'
           AND LOWER(COALESCE(round, '')) LIKE '%qual%'
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
+
+    local.execute("""
+        UPDATE matches
+        SET round = CASE round
+            WHEN 'R1' THEN 'Q1'
+            WHEN 'R2' THEN 'Q2'
+            ELSE round
+        END
+        WHERE tourney_id = 'SCRAPED'
+          AND scrape_provider = 'sofascore'
+          AND round IN ('R1', 'R2')
     """)
     changed += local.execute("SELECT changes()").fetchone()[0]
 

@@ -533,19 +533,30 @@ class SofaScoreMatchProvider(MatchProvider):
         round_info = event.get("roundInfo") or {}
         raw = round_info.get("name") or round_info.get("round") or ""
         text = self._norm(str(raw))
-        if text in self._ROUND_MAP:
-            return self._ROUND_MAP[text]
-        if "qual" in text:
-            if "final" in text or re.search(r"\b(?:2|2nd|second)\b", text):
+        label = self._event_label(event)
+        is_qualifying_event = self._label_has_any(
+            label, ("qualifying", "qualification"))
+        if "qual" in text or is_qualifying_event:
+            combined = f"{text} {label}"
+            if "final" in combined or re.search(r"\b(?:2|2nd|second)\b", combined):
                 return "Q2"
             return "Q1"
+        if text in self._ROUND_MAP:
+            return self._ROUND_MAP[text]
         match = re.search(r"(\d+)", text)
         if "round" in text and match:
-            return f"R{match.group(1)}"
-        label = self._event_label(event)
+            return self._provider_round_from_ordinal(int(match.group(1)))
         if self._label_has_any(label, ("united cup", "davis cup", "billie jean")):
             return "RR"
         return str(raw or "")
+
+    @staticmethod
+    def _provider_round_from_ordinal(ordinal: int) -> str:
+        if ordinal == 1:
+            return "Q1"
+        if ordinal == 2:
+            return "Q2"
+        return f"R{ordinal}"
 
     @staticmethod
     def _minutes_from_event(event: dict[str, Any]) -> int | None:
@@ -664,9 +675,11 @@ class SofaScoreMatchProvider(MatchProvider):
     def _event_label(self, event: dict[str, Any]) -> str:
         tournament = event.get("tournament") or {}
         unique_tournament = event.get("uniqueTournament") or {}
+        nested_unique = tournament.get("uniqueTournament") or {}
         return self._norm(" ".join([
             str(tournament.get("name") or ""),
             str(unique_tournament.get("name") or ""),
+            str(nested_unique.get("name") or ""),
             str((tournament.get("category") or {}).get("name") or ""),
             str(event.get("slug") or ""),
         ]))
