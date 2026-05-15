@@ -535,6 +535,10 @@ class MainWindow(QMainWindow):
         from cloud.sync import sync_cloud_to_local
         sync_cloud_to_local(
             local_db_path=self.db.db_path,
+            match_provider="sofascore",
+            include_players=False,
+            include_extended=False,
+            canonicalize_matches=False,
             progress_callback=lambda table, rows: progress_cb(
                 90, 100, f"Syncing {table} ({rows} rows)..."),
         )

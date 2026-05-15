@@ -32,10 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 # Tables whose contents are *entirely* scraped (no CSV-historical rows).
-# We mirror them by full-replace.
-FULL_REPLACE_TABLES = (
+# We mirror them by full-replace.  Cache tables are kept separate so callers
+# that only refreshed recent match data can skip the heavy extended-stat facts.
+CACHE_REPLACE_TABLES = (
     "scrape_cache",
     "scrape_cache_provider",
+)
+
+EXTENDED_REPLACE_TABLES = (
     "extended_stats_cache",
     "match_winners_errors",
     "match_serve_speed",
@@ -45,6 +49,8 @@ FULL_REPLACE_TABLES = (
     "match_mcp_rally",
     "match_mcp_tactics",
 )
+
+FULL_REPLACE_TABLES = CACHE_REPLACE_TABLES + EXTENDED_REPLACE_TABLES
 
 # Tables with primary key — INSERT OR REPLACE is enough.
 UPSERT_TABLES = (
@@ -249,7 +255,14 @@ def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
     """)
     changed += local.execute("SELECT changes()").fetchone()[0]
 
-    changed += _fix_numeric_wta_scraped_tour(local)
+    n_wta_tour = _fix_numeric_wta_scraped_tour(local)
+    if n_wta_tour:
+        logger.info(
+            "  matches: fixed tour field for %d scraped WTA match pairs "
+            "(was 'atp', now 'wta')",
+            n_wta_tour,
+        )
+    changed += n_wta_tour
 
     local.execute("""
         UPDATE matches
@@ -341,6 +354,11 @@ def sync_cloud_to_local(
     local_db_path: Optional[Path] = None,
     progress_callback: Optional[Callable[[str, int], None]] = None,
     timeout_seconds: float = 60.0,
+    match_provider: Optional[str] = None,
+    include_players: bool = True,
+    include_caches: bool = True,
+    include_extended: bool = True,
+    canonicalize_matches: bool = True,
 ) -> dict:
     """Pull live data from Turso and merge into the local DB.
 
@@ -361,6 +379,13 @@ def sync_cloud_to_local(
 
     t0 = time.time()
     logger.info("Cloud sync: opening Turso connection...")
+    if match_provider or not include_players or not include_extended:
+        logger.info(
+            "Cloud sync scope: match_provider=%s, include_players=%s, "
+            "include_caches=%s, include_extended=%s",
+            match_provider or "all", include_players, include_caches,
+            include_extended,
+        )
     client = libsql_client.create_client_sync(
         url=_http_url(), auth_token=_auth_token())
 
@@ -371,10 +396,16 @@ def sync_cloud_to_local(
     try:
         local.execute("BEGIN")
 
-        # 1) matches: only the live (scraped) rows
+        # 1) matches: only the live (scraped) rows.  A provider-scoped sync is
+        # used by the SofaScore button because that job only changes SofaScore
+        # rows; app startup still performs the full scraped-row mirror.
+        matches_where = "tourney_id='SCRAPED'"
+        if match_provider:
+            provider = str(match_provider).strip().lower().replace("'", "''")
+            matches_where += f" AND scrape_provider='{provider}'"
         counts["matches"] = _copy_table(
             client, local, "matches",
-            where="tourney_id='SCRAPED'",
+            where=matches_where,
             progress_callback=progress_callback,
         )
         # Remove SCRAPED rows that duplicate local CSV rows (same year +
@@ -382,7 +413,15 @@ def sync_cloud_to_local(
         # no historical CSVs so it accumulates SCRAPED rows for matches that
         # are already in the local Sackmann archive — dedup here instead.
         n_dedup = 0
-        local.execute("""
+        if canonicalize_matches:
+            provider_filter = ""
+            if match_provider:
+                provider_filter = (
+                    " AND scraped.scrape_provider = '"
+                    + str(match_provider).strip().lower().replace("'", "''")
+                    + "'"
+                )
+            local.execute(f"""
             DELETE FROM matches
             WHERE tourney_id = 'SCRAPED'
               AND rowid IN (
@@ -396,17 +435,19 @@ def sync_cloud_to_local(
                  AND csv.loser_name  = scraped.loser_name
                  AND csv.tourney_id != 'SCRAPED'
                 WHERE scraped.tourney_id = 'SCRAPED'
+                  {provider_filter}
               )
         """)
-        n_dedup = local.execute("SELECT changes()").fetchone()[0]
-        if n_dedup:
-            logger.info("  matches: removed %d SCRAPED rows that duplicate CSV data",
-                        n_dedup)
-        n_canonical = _canonicalize_scraped_matches(local)
-        if n_canonical:
-            logger.info(
-                "  matches: canonicalized/removed %d SCRAPED duplicate rows",
-                n_canonical)
+            n_dedup = local.execute("SELECT changes()").fetchone()[0]
+            if n_dedup:
+                logger.info(
+                    "  matches: removed %d SCRAPED rows that duplicate CSV data",
+                    n_dedup)
+            n_canonical = _canonicalize_scraped_matches(local)
+            if n_canonical:
+                logger.info(
+                    "  matches: canonicalized/removed %d SCRAPED duplicate rows",
+                    n_canonical)
 
         # 2) rankings: only the live snapshot
         counts["rankings"] = _copy_table(
@@ -416,15 +457,21 @@ def sync_cloud_to_local(
         )
 
         # 3) players: upsert (preserves any CSV-loaded rows)
-        for t in UPSERT_TABLES:
-            counts[t] = _copy_table(
-                client, local, t,
-                upsert=True, delete_local=False,
-                progress_callback=progress_callback,
-            )
+        if include_players:
+            for t in UPSERT_TABLES:
+                counts[t] = _copy_table(
+                    client, local, t,
+                    upsert=True, delete_local=False,
+                    progress_callback=progress_callback,
+                )
 
         # 4) full-replace tables (caches + extended-stats fact tables)
-        for t in FULL_REPLACE_TABLES:
+        replace_tables = []
+        if include_caches:
+            replace_tables.extend(CACHE_REPLACE_TABLES)
+        if include_extended:
+            replace_tables.extend(EXTENDED_REPLACE_TABLES)
+        for t in replace_tables:
             counts[t] = _copy_table(
                 client, local, t,
                 progress_callback=progress_callback,

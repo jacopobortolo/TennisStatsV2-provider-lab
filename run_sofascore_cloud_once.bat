@@ -16,16 +16,27 @@ set "LOGDIR=%USERPROFILE%\.tennis_analytics\logs"
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "STAMP=%%i"
 set "LOGFILE=%LOGDIR%\sofascore_cloud_%STAMP%.log"
+set "PROXY_OUT=%LOGDIR%\sofascore_proxy_%STAMP%.out.log"
+set "PROXY_ERR=%LOGDIR%\sofascore_proxy_%STAMP%.err.log"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/health' -TimeoutSec 2; if ($r.status -eq 'ok') { exit 0 } exit 1 } catch { exit 1 }"
-if not %ERRORLEVEL% EQU 0 (
+if errorlevel 1 (
     echo Starting SofaScore proxy...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%PY%' -ArgumentList '-m','tennis_app.scripts.sofascore_proxy','--host','127.0.0.1','--port','8765' -WorkingDirectory '%CD%' -WindowStyle Minimized"
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ok=$false; for ($i=0; $i -lt 20; $i++) { try { $r=Invoke-RestMethod -Uri 'http://127.0.0.1:8765/health' -TimeoutSec 2; if ($r.status -eq 'ok') { $ok=$true; break } } catch {}; Start-Sleep -Seconds 1 }; if (-not $ok) { exit 1 }"
-    if not %ERRORLEVEL% EQU 0 (
-        echo SofaScore proxy did not become ready. See %LOGFILE%
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'tennis_app\.scripts\.sofascore_proxy' -and $_.CommandLine -match '8765' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%PY%' -ArgumentList '-m','tennis_app.scripts.sofascore_proxy','--host','127.0.0.1','--port','8765' -WorkingDirectory '%CD%' -WindowStyle Minimized -RedirectStandardOutput '%PROXY_OUT%' -RedirectStandardError '%PROXY_ERR%'"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ok=$false; for ($i=0; $i -lt 60; $i++) { try { $r=Invoke-RestMethod -Uri 'http://127.0.0.1:8765/health' -TimeoutSec 2; if ($r.status -eq 'ok') { $ok=$true; break } } catch {}; Start-Sleep -Seconds 1 }; if (-not $ok) { exit 1 }"
+    if errorlevel 1 (
+        echo SofaScore proxy did not become ready.
+        echo Proxy stdout: %PROXY_OUT%
+        echo Proxy stderr: %PROXY_ERR%
+        if exist "%PROXY_ERR%" powershell -NoProfile -Command "Get-Content -Path '%PROXY_ERR%' -Tail 40"
         exit /b 1
     )
+)
+
+if "%SOFASCORE_CLOUD_DRY_RUN%"=="1" (
+    echo SofaScore proxy ready. Dry run requested; skipping cloud scrape.
+    exit /b 0
 )
 
 echo Writing log to %LOGFILE%
