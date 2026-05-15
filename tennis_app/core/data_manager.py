@@ -1203,8 +1203,9 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
                 elif ta_not_found:
                     report["not_found"] += 1
                     logger.info(
-                        "Player %s not found on tennisabstract "
-                        "(fingerprint cached to suppress future retries)", name)
+                        "Player %s not found on %s "
+                        "(fingerprint cached to suppress future retries)",
+                        name, selected_match_provider)
                 else:
                     report["empty"] += 1
                     if had_cache:

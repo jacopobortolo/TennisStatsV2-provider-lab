@@ -208,6 +208,20 @@ class SofaScoreMatchProvider(MatchProvider):
         return re.sub(r"\s+", " ", clean).strip().lower()
 
     @classmethod
+    def _player_key_without_suffix(cls, text: str | None) -> str:
+        key = cls._player_key(text)
+        return re.sub(r"\s+(?:jr\.?|sr\.?|ii|iii|iv)$", "", key).strip()
+
+    @classmethod
+    def _candidate_matches_player(cls, candidate_name: str, wanted: str) -> bool:
+        if " - " in candidate_name:
+            return False
+        candidate = cls._player_key(candidate_name)
+        candidate_base = cls._player_key_without_suffix(candidate_name)
+        wanted_base = cls._player_key_without_suffix(wanted)
+        return candidate == wanted_base or candidate_base == wanted_base
+
+    @classmethod
     def _search_queries(cls, player_name: str) -> list[str]:
         queries = []
         for query in (player_name, clean_player_name(player_name)):
@@ -242,6 +256,10 @@ class SofaScoreMatchProvider(MatchProvider):
                     name = entity.get("name") or entity.get("shortName") or ""
                     if not name:
                         continue
+                    short_name = entity.get("shortName") or name
+                    if (not self._candidate_matches_player(name, player_name)
+                            and not self._candidate_matches_player(short_name, player_name)):
+                        continue
                     entity_id = entity.get("id")
                     dedupe_key = entity_id if entity_id is not None else name
                     if dedupe_key in seen_ids:
@@ -249,8 +267,11 @@ class SofaScoreMatchProvider(MatchProvider):
                     seen_ids.add(dedupe_key)
                     candidates.append(entity)
         wanted = self._player_key(player_name)
+        wanted_base = self._player_key_without_suffix(player_name)
         candidates.sort(key=lambda item: (
             self._player_key(item.get("name") or item.get("shortName")) != wanted,
+            self._player_key_without_suffix(
+                item.get("name") or item.get("shortName")) != wanted_base,
             item.get("name") or "",
         ))
         return candidates

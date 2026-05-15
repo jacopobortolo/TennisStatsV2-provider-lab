@@ -55,6 +55,13 @@ def _player_match_key(name):
     return s.lower()
 
 
+def _strip_player_name_suffix(name):
+    if not isinstance(name, str) or not name:
+        return name
+    return re.sub(r"\s+(?:jr\.?|sr\.?|ii|iii|iv)$", "", name.strip(),
+                  flags=re.IGNORECASE)
+
+
 def _strip_player_seed_marker(name):
     """Remove seed/entry markers that some live providers append to names."""
     if not isinstance(name, str):
@@ -691,6 +698,16 @@ class TennisDatabase:
         except Exception:
             logger.exception(
                 "Failed to normalize matches.winner_name/loser_name "
+                "(non-fatal, will retry on next start)")
+
+        # One-shot migration: enforce provider priority on historical scraped
+        # rows too.  Import already applies this for new rows, but databases may
+        # contain duplicates created before provider-aware merging existed.
+        try:
+            self._migrate_prune_scraped_provider_duplicates(cur)
+        except Exception:
+            logger.exception(
+                "Failed to prune scraped provider duplicates "
                 "(non-fatal, will retry on next start)")
 
         # One-shot migration: fix scraped WTA matches stored with tour='atp'.
@@ -2498,7 +2515,14 @@ class TennisDatabase:
             if not isinstance(name, str) or not name:
                 return name
             key = _player_match_key(name)
-            return canonical_name_by_key.get(key, name)
+            if key in canonical_name_by_key:
+                return canonical_name_by_key[key]
+            stripped = _strip_player_name_suffix(name)
+            if stripped != name:
+                stripped_key = _player_match_key(stripped)
+                if stripped_key in canonical_name_by_key:
+                    return canonical_name_by_key[stripped_key]
+            return name
 
         # Replace scraped winner/loser names with the canonical CSV spelling
         # whenever the player exists in the players table.  Prevents duplicate
@@ -2686,6 +2710,53 @@ class TennisDatabase:
         )
         try:
             matches_df.to_sql(staging_name, self.conn, if_exists="replace", index=False)
+            self.conn.execute(f"""
+                DELETE FROM {staging_name}
+                WHERE rowid IN (
+                    SELECT other.rowid
+                    FROM {staging_name} canonical
+                    JOIN {staging_name} other
+                      ON canonical.rowid != other.rowid
+                     AND canonical.scrape_provider = other.scrape_provider
+                     AND canonical.round IN ('Q1', 'Q2')
+                     AND other.round NOT IN ('Q1', 'Q2')
+                     AND COALESCE(canonical.tour, '') = COALESCE(other.tour, '')
+                     AND SUBSTR(canonical.tourney_date, 1, 4) = SUBSTR(other.tourney_date, 1, 4)
+                     AND canonical.tourney_name = other.tourney_name
+                     AND canonical.winner_name = other.winner_name
+                     AND canonical.loser_name = other.loser_name
+                     AND COALESCE(canonical.score, '') = COALESCE(other.score, '')
+                     AND (
+                        (other.round = 'R1' AND canonical.round = 'Q1')
+                        OR (other.round = 'R2' AND canonical.round = 'Q2')
+                        OR LOWER(COALESCE(other.round, '')) LIKE '%qual%'
+                     )
+                )
+            """)
+            self.conn.execute(f"""
+                DELETE FROM matches
+                WHERE rowid IN (
+                    SELECT other.rowid
+                    FROM matches canonical
+                    JOIN matches other
+                      ON canonical.rowid != other.rowid
+                     AND canonical.tourney_id = 'SCRAPED'
+                     AND other.tourney_id = 'SCRAPED'
+                     AND canonical.round IN ('Q1', 'Q2')
+                     AND other.round NOT IN ('Q1', 'Q2')
+                     AND COALESCE(canonical.tour, '') = COALESCE(other.tour, '')
+                     AND SUBSTR(canonical.tourney_date, 1, 4) = SUBSTR(other.tourney_date, 1, 4)
+                     AND canonical.tourney_name = other.tourney_name
+                     AND canonical.winner_name = other.winner_name
+                     AND canonical.loser_name = other.loser_name
+                     AND COALESCE(canonical.score, '') = COALESCE(other.score, '')
+                     AND (
+                        (other.round = 'R1' AND canonical.round = 'Q1')
+                        OR (other.round = 'R2' AND canonical.round = 'Q2')
+                        OR LOWER(COALESCE(other.round, '')) LIKE '%qual%'
+                     )
+                )
+            """)
             self.conn.execute(f"""
                 DELETE FROM {staging_name}
                 WHERE rowid IN (
@@ -3464,6 +3535,10 @@ class TennisDatabase:
                 continue
             key = _player_match_key(raw)
             canonical = canonical_by_key.get(key)
+            if canonical is None:
+                stripped = _strip_player_name_suffix(raw)
+                if stripped != raw:
+                    canonical = canonical_by_key.get(_player_match_key(stripped))
             if canonical and canonical != raw:
                 rename_pairs.append((raw, canonical))
 
@@ -3516,6 +3591,48 @@ class TennisDatabase:
                 "Normalized %d matches.player_name spellings; "
                 "deleted %d duplicate match rows",
                 len(rename_pairs), deleted)
+
+    def _migrate_prune_scraped_provider_duplicates(self, cur):
+        """Remove historical SofaScore rows shadowed by TennisAbstract.
+
+        The active import path already prefers TennisAbstract over SofaScore for
+        matching scraped matches. This migration applies the same rule to rows
+        that were imported before that provider-aware merge existed.
+        """
+        if _is_remote_conn(self.conn):
+            return  # remote cleanup is run explicitly to avoid startup cost
+
+        before = cur.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        cur.execute("""
+            DELETE FROM matches
+            WHERE rowid IN (
+                SELECT ss.rowid
+                FROM matches ss
+                JOIN matches ta
+                  ON ss.rowid != ta.rowid
+                 AND ss.tourney_id = 'SCRAPED'
+                 AND ta.tourney_id = 'SCRAPED'
+                 AND COALESCE(ss.tour, '') = COALESCE(ta.tour, '')
+                 AND SUBSTR(ss.tourney_date, 1, 4) = SUBSTR(ta.tourney_date, 1, 4)
+                 AND ss.winner_name = ta.winner_name
+                 AND ss.loser_name = ta.loser_name
+                 AND LOWER(ss.tourney_name) = LOWER(ta.tourney_name)
+                 AND ss.round = ta.round
+                WHERE LOWER(COALESCE(NULLIF(ss.scrape_provider, ''),
+                      CASE WHEN ss.winner_seed IS NULL THEN 'sofascore'
+                           ELSE 'tennisabstract' END)) = 'sofascore'
+                  AND LOWER(COALESCE(NULLIF(ta.scrape_provider, ''),
+                      CASE WHEN ta.winner_seed IS NULL THEN 'sofascore'
+                           ELSE 'tennisabstract' END)) = 'tennisabstract'
+            )
+        """)
+        after = cur.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        deleted = before - after
+        if deleted:
+            self.conn.commit()
+            logger.info(
+                "Pruned %d historical SofaScore rows shadowed by TennisAbstract",
+                deleted)
 
     def _migrate_fix_scraped_match_tour(self, cur):
         """Fix scraped matches that were saved with tour='atp' regardless of
