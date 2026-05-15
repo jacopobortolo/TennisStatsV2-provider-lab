@@ -2864,67 +2864,111 @@ class TennisDatabase:
                      )
                 )
             """)
-            self.conn.execute(f"""
-                DELETE FROM {staging_name}
-                WHERE rowid IN (
-                    SELECT sf.rowid
-                    FROM {staging_name} sf
-                    JOIN matches ta
-                      ON ta.tourney_id = 'SCRAPED'
-                     AND ta.scrape_provider = 'tennisabstract'
-                     AND sf.scrape_provider = 'sofascore'
-                     AND COALESCE(ta.tour, '') = COALESCE(sf.tour, '')
-                     AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
-                     AND ta.winner_name = sf.winner_name
-                     AND ta.loser_name = sf.loser_name
-                     AND (
-                        (sf.round = 'R1' AND ta.round = 'Q1')
-                        OR (sf.round = 'R2' AND ta.round = 'Q2')
-                     )
-                     AND (
-                        COALESCE(ta.score, '') = COALESCE(sf.score, '')
-                        OR ta.score LIKE COALESCE(sf.score, '') || '%'
-                        OR sf.score LIKE COALESCE(ta.score, '') || '%'
-                     )
-                     AND ABS(
-                        CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
-                        - CAST(ta.tourney_date AS INTEGER)
-                     ) <= 3
-                    WHERE ta.tourney_name = sf.tourney_name
-                       OR ta.tourney_level != sf.tourney_level
-                )
-            """)
-            self.conn.execute("""
-                DELETE FROM matches
-                WHERE rowid IN (
-                    SELECT sf.rowid
-                    FROM matches sf
-                    JOIN matches ta
-                      ON ta.tourney_id = 'SCRAPED'
-                     AND sf.tourney_id = 'SCRAPED'
-                     AND ta.scrape_provider = 'tennisabstract'
-                     AND sf.scrape_provider = 'sofascore'
-                     AND ta.tour = sf.tour
-                     AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
-                     AND ta.winner_name = sf.winner_name
-                     AND ta.loser_name = sf.loser_name
-                     AND (
-                        (sf.round = 'R1' AND ta.round = 'Q1')
-                        OR (sf.round = 'R2' AND ta.round = 'Q2')
-                     )
-                     AND (
-                        COALESCE(ta.score, '') = COALESCE(sf.score, '')
-                        OR ta.score LIKE COALESCE(sf.score, '') || '%'
-                        OR sf.score LIKE COALESCE(ta.score, '') || '%'
-                     )
-                     AND ABS(
-                        CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
-                        - CAST(ta.tourney_date AS INTEGER)
-                     ) <= 3
-                    WHERE ta.tourney_name = sf.tourney_name
-                       OR ta.tourney_level != sf.tourney_level
-                )
-            """)
+            if not _is_remote_conn(self.conn):
+                self.conn.execute(f"""
+                    DELETE FROM {staging_name}
+                    WHERE rowid IN (
+                        SELECT sf.rowid
+                        FROM {staging_name} sf
+                        JOIN matches ta
+                          ON ta.tourney_id = 'SCRAPED'
+                         AND ta.scrape_provider = 'tennisabstract'
+                         AND sf.scrape_provider = 'sofascore'
+                         AND COALESCE(ta.tour, '') = COALESCE(sf.tour, '')
+                         AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                         AND ta.winner_name = sf.winner_name
+                         AND ta.loser_name = sf.loser_name
+                         AND (
+                            (sf.round = 'R1' AND ta.round = 'Q1')
+                            OR (sf.round = 'R2' AND ta.round = 'Q2')
+                         )
+                         AND (
+                            COALESCE(ta.score, '') = COALESCE(sf.score, '')
+                            OR ta.score LIKE COALESCE(sf.score, '') || '%'
+                            OR sf.score LIKE COALESCE(ta.score, '') || '%'
+                         )
+                         AND ABS(
+                            CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
+                            - CAST(ta.tourney_date AS INTEGER)
+                         ) <= 3
+                        WHERE ta.tourney_name = sf.tourney_name
+                           OR ta.tourney_level != sf.tourney_level
+                    )
+                """)
+                self.conn.execute("""
+                    DELETE FROM matches
+                    WHERE rowid IN (
+                        SELECT sf.rowid
+                        FROM matches sf
+                        JOIN matches ta
+                          ON ta.tourney_id = 'SCRAPED'
+                         AND sf.tourney_id = 'SCRAPED'
+                         AND ta.scrape_provider = 'tennisabstract'
+                         AND sf.scrape_provider = 'sofascore'
+                         AND ta.tour = sf.tour
+                         AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                         AND ta.winner_name = sf.winner_name
+                         AND ta.loser_name = sf.loser_name
+                         AND (
+                            (sf.round = 'R1' AND ta.round = 'Q1')
+                            OR (sf.round = 'R2' AND ta.round = 'Q2')
+                         )
+                         AND (
+                            COALESCE(ta.score, '') = COALESCE(sf.score, '')
+                            OR ta.score LIKE COALESCE(sf.score, '') || '%'
+                            OR sf.score LIKE COALESCE(ta.score, '') || '%'
+                         )
+                         AND ABS(
+                            CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
+                            - CAST(ta.tourney_date AS INTEGER)
+                         ) <= 3
+                        WHERE ta.tourney_name = sf.tourney_name
+                           OR ta.tourney_level != sf.tourney_level
+                    )
+                """)
+                self.conn.execute(f"""
+                    DELETE FROM {staging_name}
+                    WHERE rowid IN (
+                        SELECT s.rowid
+                        FROM {staging_name} s
+                        JOIN matches m
+                          ON m.tourney_id = 'SCRAPED'
+                         AND m.scrape_provider = 'tennisabstract'
+                         AND LOWER(COALESCE(s.scrape_provider, '')) = 'sofascore'
+                         AND COALESCE(m.tour, '') = COALESCE(s.tour, '')
+                         AND SUBSTR(m.tourney_date, 1, 4) = SUBSTR(s.tourney_date, 1, 4)
+                         AND m.winner_name = s.winner_name
+                         AND m.loser_name = s.loser_name
+                         AND m.round = s.round
+                         AND m.tourney_name != s.tourney_name
+                         AND ABS(
+                            CAST(COALESCE(NULLIF(s.source_match_date, ''), s.tourney_date) AS INTEGER)
+                            - CAST(m.tourney_date AS INTEGER)
+                         ) <= 7
+                    )
+                """)
+                self.conn.execute("""
+                    DELETE FROM matches
+                    WHERE rowid IN (
+                        SELECT sf.rowid
+                        FROM matches sf
+                        JOIN matches ta
+                          ON ta.tourney_id = 'SCRAPED'
+                         AND sf.tourney_id = 'SCRAPED'
+                         AND ta.scrape_provider = 'tennisabstract'
+                         AND sf.scrape_provider = 'sofascore'
+                         AND ta.tour = sf.tour
+                         AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                         AND ta.winner_name = sf.winner_name
+                         AND ta.loser_name = sf.loser_name
+                         AND ta.round = sf.round
+                         AND ta.tourney_name != sf.tourney_name
+                         AND ABS(
+                            CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
+                            - CAST(ta.tourney_date AS INTEGER)
+                         ) <= 7
+                    )
+                """)
             self.conn.execute(f"""
                 DELETE FROM {staging_name}
                 WHERE rowid IN (
@@ -2933,49 +2977,6 @@ class TennisDatabase:
                     JOIN matches m
                       ON {match_key}
                     WHERE m.tourney_id != 'SCRAPED'
-                )
-            """)
-            self.conn.execute(f"""
-                DELETE FROM {staging_name}
-                WHERE rowid IN (
-                    SELECT s.rowid
-                    FROM {staging_name} s
-                    JOIN matches m
-                      ON m.tourney_id = 'SCRAPED'
-                     AND m.scrape_provider = 'tennisabstract'
-                     AND LOWER(COALESCE(s.scrape_provider, '')) = 'sofascore'
-                     AND COALESCE(m.tour, '') = COALESCE(s.tour, '')
-                     AND SUBSTR(m.tourney_date, 1, 4) = SUBSTR(s.tourney_date, 1, 4)
-                     AND m.winner_name = s.winner_name
-                     AND m.loser_name = s.loser_name
-                     AND m.round = s.round
-                     AND m.tourney_name != s.tourney_name
-                     AND ABS(
-                        CAST(COALESCE(NULLIF(s.source_match_date, ''), s.tourney_date) AS INTEGER)
-                        - CAST(m.tourney_date AS INTEGER)
-                     ) <= 7
-                )
-            """)
-            self.conn.execute("""
-                DELETE FROM matches
-                WHERE rowid IN (
-                    SELECT sf.rowid
-                    FROM matches sf
-                    JOIN matches ta
-                      ON ta.tourney_id = 'SCRAPED'
-                     AND sf.tourney_id = 'SCRAPED'
-                     AND ta.scrape_provider = 'tennisabstract'
-                     AND sf.scrape_provider = 'sofascore'
-                     AND ta.tour = sf.tour
-                     AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
-                     AND ta.winner_name = sf.winner_name
-                     AND ta.loser_name = sf.loser_name
-                     AND ta.round = sf.round
-                     AND ta.tourney_name != sf.tourney_name
-                     AND ABS(
-                        CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
-                        - CAST(ta.tourney_date AS INTEGER)
-                     ) <= 7
                 )
             """)
             self.conn.execute(f"""
