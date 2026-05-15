@@ -493,7 +493,7 @@ class GlobalStatsPage(QWidget):
         self.tour_pills = self._filter_pills(["All", "ATP", "WTA"])
         self.level_pills = self._filter_pills([
             "All", "Grand Slam", "Masters 1000", "ATP/WTA Finals",
-            "Olympics", "ATP/WTA 500", "ATP/WTA 250", "Challenger",
+            "Olympics", "ATP/WTA 500", "DC/BJKC", "Challenger",
         ])
         self.surface_pills = self._filter_pills(["All", "Hard", "Clay", "Grass", "Carpet"])
         self.era_pills = self._filter_pills(["All-time", "Open Era", "2000s", "2010s", "2020s"])
@@ -504,7 +504,7 @@ class GlobalStatsPage(QWidget):
         # Default selections: all levels except Challenger; all rounds except qualifiers
         self.level_pills.set_values([
             "Grand Slam", "Masters 1000", "ATP/WTA Finals",
-            "Olympics", "ATP/WTA 500", "ATP/WTA 250",
+            "Olympics", "ATP/WTA 500", "DC/BJKC",
         ])
         self.round_pills.set_values([
             "F", "SF", "QF", "R16", "R32", "R64", "R128", "RR",

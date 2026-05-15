@@ -28,7 +28,7 @@ LEVEL_FILTERS = {
     "ATP/WTA Finals":  ["F", "E"],    # ATP/WTA Tour Finals + WTA Elite Trophy
     "Olympics":        ["O"],          # modern code; historical 'A' handled in _where
     "ATP/WTA 500":     ["A", "P"],    # ATP 500 + WTA Premier
-    "ATP/WTA 250":     ["A", "I"],    # ATP 250 + WTA International
+    "DC/BJKC":       ["D"],         # DC/BJKC / Billie Jean King Cup
     "Challenger":      ["C"],
 }
 
