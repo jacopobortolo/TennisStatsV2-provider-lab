@@ -1292,6 +1292,158 @@ class GlobalStatsEngine:
         full_results.sort(key=lambda r: (-r[1], r[0]))
         return full_results[:limit]
 
+    def _stat_same_country_wins(self, filters, limit):
+        """Total wins against players of the same country."""
+        where, params = self._where(filters)
+        rows = self._query(f"""
+            SELECT winner_name AS player, COUNT(*) AS value
+            FROM matches m
+            WHERE {where}
+              AND winner_name IS NOT NULL AND winner_name != ''
+              AND winner_ioc IS NOT NULL AND winner_ioc != ''
+              AND loser_ioc IS NOT NULL AND loser_ioc != ''
+              AND winner_ioc = loser_ioc
+              AND score NOT LIKE '%W/O%'
+            GROUP BY winner_name
+            ORDER BY value DESC, player ASC
+            LIMIT ?
+        """, params + [limit])
+        return [(r["player"], r["value"], "same-country wins") for r in rows]
+
+    def _stat_same_country_win_streak(self, filters, limit):
+        """Longest consecutive wins against same-country opponents."""
+        where, params = self._where(filters)
+        rows = self._query(f"""
+            WITH player_matches AS (
+                SELECT winner_name AS player, 1 AS won, tourney_date,
+                       tourney_name, tourney_level, surface, round,
+                       winner_ioc, loser_ioc, score,
+                       COALESCE(l_bpFaced, 0) - COALESCE(l_bpSaved, 0) AS breaks_made,
+                       COALESCE(w_bpFaced, 0) - COALESCE(w_bpSaved, 0) AS breaks_conceded
+                FROM matches m
+                WHERE {where} AND winner_name IS NOT NULL AND winner_name != ''
+                  AND winner_ioc IS NOT NULL AND winner_ioc != ''
+                  AND loser_ioc IS NOT NULL AND loser_ioc != ''
+                  AND score NOT LIKE '%W/O%'
+                UNION ALL
+                SELECT loser_name AS player, 0 AS won, tourney_date,
+                       tourney_name, tourney_level, surface, round,
+                       loser_ioc AS winner_ioc, winner_ioc AS loser_ioc, score,
+                       0 AS breaks_made, 0 AS breaks_conceded
+                FROM matches m
+                WHERE {where} AND loser_name IS NOT NULL AND loser_name != ''
+                  AND winner_ioc IS NOT NULL AND winner_ioc != ''
+                  AND loser_ioc IS NOT NULL AND loser_ioc != ''
+                  AND score NOT LIKE '%W/O%'
+            )
+            SELECT player, won, tourney_date, tourney_name, tourney_level,
+                   surface, round, winner_ioc, loser_ioc, score,
+                   breaks_made, breaks_conceded
+            FROM player_matches
+            ORDER BY player, tourney_date,
+                     CASE round
+                         WHEN 'Q1' THEN 1 WHEN 'Q2' THEN 2 WHEN 'Q3' THEN 3
+                         WHEN 'R128' THEN 4 WHEN 'R64' THEN 5 WHEN 'R32' THEN 6
+                         WHEN 'R16' THEN 7 WHEN 'QF' THEN 8 WHEN 'SF' THEN 9
+                         WHEN 'F' THEN 10 ELSE 11 END
+        """, params + params)
+
+        full_results = []
+        by_player = defaultdict(list)
+        for row in rows:
+            by_player[row["player"]].append(row)
+
+        for player, matches in by_player.items():
+            current = 0
+            current_start = current_end = None
+            streak_sw = streak_sl = streak_bm = streak_bc = 0
+            for match in matches:
+                same_ioc = (match.get("winner_ioc") or "").strip().upper() == (match.get("loser_ioc") or "").strip().upper()
+                if match["won"] and same_ioc:
+                    if current == 0:
+                        current_start = match
+                    current += 1
+                    current_end = match
+                    parsed = parse_score(match.get("score"))
+                    if parsed:
+                        streak_sw += parsed["sets_won"]
+                        streak_sl += parsed["sets_lost"]
+                    streak_bm += int(match["breaks_made"] or 0)
+                    streak_bc += int(match["breaks_conceded"] or 0)
+                elif not match["won"] and same_ioc:
+                    if current > 0:
+                        first_year = self._date_year(current_start["tourney_date"] if current_start else "")
+                        last_year = self._date_year(current_end["tourney_date"] if current_end else "")
+                        full_results.append((
+                            player, current, f"{first_year}-{last_year}",
+                            current_start["tourney_date"] if current_start else "",
+                            current_end["tourney_date"] if current_end else "",
+                            "", streak_sw, streak_sl, streak_bm, streak_bc,
+                        ))
+                    current = 0
+                    current_start = current_end = None
+                    streak_sw = streak_sl = streak_bm = streak_bc = 0
+            if current > 0:
+                first_year = self._date_year(current_start["tourney_date"] if current_start else "")
+                last_year = self._date_year(current_end["tourney_date"] if current_end else "")
+                full_results.append((
+                    player, current, f"{first_year}-{last_year}",
+                    current_start["tourney_date"] if current_start else "",
+                    current_end["tourney_date"] if current_end else "",
+                    "", streak_sw, streak_sl, streak_bm, streak_bc,
+                ))
+
+        full_results.sort(key=lambda r: (-r[1], r[0]))
+        full_results = full_results[:limit]
+
+        ranked_rows = []
+        for i, r in enumerate(full_results, 1):
+            sw, sl, bm, bc = r[6], r[7], r[8], r[9]
+            sets_str = f"{sw}-{sl}" if (sw or sl) else ""
+            breaks_str = f"{bm}-{bc}" if (bm or bc) else ""
+            ranked_rows.append([str(i), r[0], str(r[1]), r[2], sets_str, breaks_str])
+
+        streaks_meta = [
+            {
+                "player": r[0],
+                "start_date": r[3],
+                "end_date": r[4],
+                "group_attr": "same_country",
+                "group_value": "",
+            }
+            for r in full_results
+        ]
+        return {
+            "columns": ["Rank", "Player", "Wins", "Period", "Sets W-L", "Breaks"],
+            "rows": ranked_rows,
+            "streaks_meta": streaks_meta,
+            "note": "",
+        }
+
+    def get_same_country_streak_matches(self, player, start_date, end_date, filters):
+        """Return the individual same-country wins forming a streak."""
+        where, params = self._where(filters)
+        sql = f"""
+            SELECT tourney_date, tourney_name, tourney_level, surface, round,
+                   loser_name AS opponent, score,
+                   COALESCE(w_bpFaced, 0) - COALESCE(w_bpSaved, 0) AS breaks_conceded
+            FROM matches m
+            WHERE {where}
+              AND winner_name = ?
+              AND tourney_date >= ? AND tourney_date <= ?
+              AND winner_ioc IS NOT NULL AND winner_ioc != ''
+              AND loser_ioc IS NOT NULL AND loser_ioc != ''
+              AND winner_ioc = loser_ioc
+              AND score NOT LIKE '%W/O%'
+            ORDER BY tourney_date,
+                     CASE round
+                         WHEN 'Q1' THEN 1 WHEN 'Q2' THEN 2 WHEN 'Q3' THEN 3
+                         WHEN 'R128' THEN 4 WHEN 'R64' THEN 5 WHEN 'R32' THEN 6
+                         WHEN 'R16' THEN 7 WHEN 'QF' THEN 8 WHEN 'SF' THEN 9
+                         WHEN 'F' THEN 10 ELSE 11 END
+        """
+        return self._query(sql, params + [player, start_date, end_date])
+
     def get_streak_matches(self, player, start_date, end_date, filters,
                            group_attr=None, group_value=None):
         """Return the individual wins forming a win streak, ordered chronologically."""

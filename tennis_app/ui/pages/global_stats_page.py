@@ -139,6 +139,14 @@ STAT_CATALOG = [
           "Serie piu lunga di set vinti consecutivi nelle partite del giocatore.",
           "player, tournament_level, surface, season, era",
           "flatten set-scores per player ordered by match date; count consecutive sets won"),
+    _stat("same_country_wins", "Most wins vs same country", "wins", "career",
+          "Vittorie totali contro avversari della stessa nazionalita.",
+          "player, tournament_level, surface, season, era",
+          "SELECT winner_name, COUNT(*) FROM matches WHERE winner_ioc=loser_ioc GROUP BY winner_name ORDER BY COUNT(*) DESC"),
+    _stat("same_country_win_streak", "Consecutive wins vs same country", "streaks", "all_time",
+          "Striscia piu lunga di vittorie consecutive contro connazionali.",
+          "player, tournament_level, surface, season, era",
+          "order matches by date; streak increments on same-IOC win, resets on loss"),
     _stat("round_streak_slam_sf_f", "Consecutive Slam SF/F", "rounds", "round",
           "Numero massimo di Slam consecutivi con almeno SF o finale raggiunta.",
           "player, tournament_level, round, season, era",
@@ -894,6 +902,15 @@ class GlobalStatsPage(QWidget):
                 set_indexes=meta.get("set_indexes"),
             )
             dlg = _SetStreakDetailDialog(title, matches, parent=self)
+        elif meta.get("group_attr") == "same_country":
+            title = f"{player} — {streak_len} wins vs same country  ({detail})"
+            matches = GlobalStatsEngine(self.db).get_same_country_streak_matches(
+                player=meta["player"],
+                start_date=meta["start_date"],
+                end_date=meta["end_date"],
+                filters=self._current_filters(),
+            )
+            dlg = _WinStreakDetailDialog(title, matches, parent=self)
         else:
             title = f"{player} — {streak_len} wins  ({detail})"
             matches = GlobalStatsEngine(self.db).get_streak_matches(
