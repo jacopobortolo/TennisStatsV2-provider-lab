@@ -363,7 +363,9 @@ def _scrape_provider_key(provider_name):
 
 
 def scrape_player_matches(player_name, min_year=None, tour="atp",
-                          max_matches=None, match_provider=None):
+                          max_matches=None, match_provider=None,
+                          existing_match_keys=None,
+                          skip_existing_matches=False):
     """
     Scrape all matches for a player from tennisabstract.com and return
     a DataFrame in the same format as the database 'matches' table.
@@ -383,6 +385,8 @@ def scrape_player_matches(player_name, min_year=None, tour="atp",
     result = provider.fetch_player_matches(
         player_name, min_year=min_year, tour=tour,
         max_matches=max_matches,
+        existing_match_keys=existing_match_keys,
+        skip_existing_matches=skip_existing_matches,
     )
     if result.df is not None and not result.df.empty:
         result.df = result.df.copy()

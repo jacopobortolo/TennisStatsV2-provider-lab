@@ -7,12 +7,13 @@ Requires the SofaScore local proxy to be running:
 Usage:
     set SOFASCORE_API_BASE_URL=http://127.0.0.1:8765/api/v1
     python -m tennis_app.scripts.sofascore_bulk_scrape \
-        --count 50 --tour atp --cloud --sleep 1.0
+        --count 50 --tour atp --cloud --sleep-max 3.0
 """
 
 import argparse
 import logging
 import os
+import random
 import sys
 import time
 
@@ -60,6 +61,27 @@ def _normalize_name(name):
     return re.sub(r"\s+", " ", name).strip().lower()
 
 
+def _existing_match_keys(db, player_name: str, tour: str):
+    """Return existing completed match keys for this player from any provider."""
+    from tennis_app.core.match_providers import SofaScoreMatchProvider
+    rows = db.conn.execute(
+        """
+        SELECT tour, tourney_date, winner_name, loser_name, tourney_name, round
+        FROM matches
+        WHERE tour = ?
+          AND (winner_name = ? OR loser_name = ?)
+          AND (is_upcoming = 0 OR is_upcoming IS NULL)
+        """,
+        (tour, player_name, player_name),
+    ).fetchall()
+    return {
+        SofaScoreMatchProvider.match_key(
+            row[0], row[1], row[2], row[3], row[4], row[5]
+        )
+        for row in rows
+    }
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -72,8 +94,14 @@ def main() -> int:
     parser.add_argument("--tour", default="atp", choices=["atp", "wta"])
     parser.add_argument("--cloud", action="store_true",
                         help="Write to Turso instead of the local DB.")
-    parser.add_argument("--sleep", type=float, default=1.0,
-                        help="Seconds to wait between players (default: 1.0).")
+    parser.add_argument("--sleep", type=float, default=None,
+                        help="Deprecated alias for --sleep-max.")
+    parser.add_argument("--sleep-max", type=float, default=3.0,
+                        help="Maximum random seconds to wait between players and HTTP requests (default: 3.0).")
+    parser.add_argument("--stats-all", action="store_true",
+                        help="Fetch statistics for existing matches too (default: only new matches).")
+    parser.add_argument("--403-breaker", dest="breaker_403", type=int, default=5,
+                        help="Stop after this many consecutive SofaScore 403 responses (default: 5).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print player names only, do not scrape.")
     parser.add_argument("--proxy-port", type=int, default=8765,
@@ -84,6 +112,10 @@ def main() -> int:
 
     proxy_url = f"http://127.0.0.1:{args.proxy_port}/api/v1"
     os.environ["SOFASCORE_API_BASE_URL"] = proxy_url
+    sleep_max = args.sleep if args.sleep is not None else args.sleep_max
+    sleep_max = max(0.0, min(3.0, float(sleep_max or 0.0)))
+    os.environ["SOFASCORE_REQUEST_SLEEP_MAX"] = str(sleep_max)
+    os.environ["SOFASCORE_403_BREAKER"] = str(max(1, int(args.breaker_403)))
 
     # Auto-start the local SofaScore proxy if needed
     proxy_process = None
@@ -134,7 +166,7 @@ def main() -> int:
     logger.info("Fetching live rankings...")
     rankings = scrape_current_rankings(tour=args.tour)
     if not rankings:
-        logger.error("No rankings returned — aborting.")
+        logger.error("No rankings returned - aborting.")
         return 1
     top_players = rankings[:args.count]
     logger.info("Will scrape %d players from SofaScore.", len(top_players))
@@ -143,14 +175,16 @@ def main() -> int:
         for entry in top_players:
             name = entry.get("name", "")
             resolved = _resolve_player(db, name, args.tour)
-            print(f"  rank {entry.get('rank','?')}: {name}  →  {resolved}")
+            print(f"  rank {entry.get('rank','?')}: {name}  ->  {resolved}")
         return 0
 
     # 2. Scrape each player
     from tennis_app.core.data_manager import scrape_player_matches
+    from tennis_app.core.match_providers import SofaScoreAccessBlocked
     total_imported = 0
     success = 0
     errors = 0
+    skipped_existing = 0
 
     for idx, entry in enumerate(top_players, 1):
         ranking_name = entry.get("name", "").strip()
@@ -161,27 +195,42 @@ def main() -> int:
                     f" (from {ranking_name})" if resolved != ranking_name else "")
 
         try:
+            existing_keys = set()
+            if not args.stats_all:
+                existing_keys = _existing_match_keys(db, resolved, args.tour)
+                if existing_keys:
+                    logger.info("  -> %d existing matches will be skipped", len(existing_keys))
             df, last_date, _sig = scrape_player_matches(
-                resolved, tour=args.tour, match_provider="sofascore")
+                resolved, tour=args.tour, match_provider="sofascore",
+                existing_match_keys=existing_keys,
+                skip_existing_matches=not args.stats_all)
             if df is not None and not df.empty:
                 imported = db.import_scraped_matches(
                     df, scraped_player_names=[resolved],
-                    replace_existing=True)
+                    replace_existing=False)
                 total_imported += imported
-                logger.info("  → %d matches scraped, %d new rows imported "
+                logger.info("  -> %d matches scraped, %d new rows imported "
                             "(latest=%s)", len(df), imported, last_date)
             else:
-                logger.info("  → no matches returned")
+                skipped_existing += len(existing_keys)
+                logger.info("  -> no matches returned")
             success += 1
+        except SofaScoreAccessBlocked as exc:
+            logger.error("  -> SofaScore access blocked: %s", exc)
+            logger.error("Stopping early to avoid extending the block.")
+            errors += 1
+            break
         except Exception:
-            logger.exception("  → error scraping %s", resolved)
+            logger.exception("  -> error scraping %s", resolved)
             errors += 1
 
         if idx < len(top_players):
-            time.sleep(args.sleep)
+            time.sleep(random.uniform(0.0, sleep_max))
 
-    logger.info("Done. %d players: %d OK, %d errors, %d total rows imported.",
-                len(top_players), success, errors, total_imported)
+    logger.info(
+        "Done. %d players: %d OK, %d errors, %d total rows imported, "
+        "%d existing-match keys skipped.",
+        len(top_players), success, errors, total_imported, skipped_existing)
     if proxy_process:
         logger.info("Shutting down proxy...")
         proxy_process.terminate()

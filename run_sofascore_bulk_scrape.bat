@@ -16,7 +16,7 @@ echo.
 set "PROXY_URL=http://127.0.0.1:8765/api/v1"
 set "SOFASCORE_API_BASE_URL=%PROXY_URL%"
 
-echo Usage: %~nx0  [--count N] [--tour atp] [--tour wta] [--cloud] [--sleep S]
+echo Usage: %~nx0  [--count N] [--tour atp] [--tour wta] [--cloud] [--sleep-max S]
 echo.
 
 "%PY%" -u -m tennis_app.scripts.sofascore_bulk_scrape %*
