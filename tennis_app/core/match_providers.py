@@ -201,6 +201,16 @@ class SofaScoreMatchProvider(MatchProvider):
         return re.sub(r"\s+", " ", (text or "")).strip().lower()
 
     @staticmethod
+    def _label_has(label: str, phrase: str) -> bool:
+        label_key = re.sub(r"[^a-z0-9]+", " ", str(label or "").lower()).strip()
+        phrase_key = re.sub(r"[^a-z0-9]+", " ", str(phrase or "").lower()).strip()
+        return bool(phrase_key and f" {phrase_key} " in f" {label_key} ")
+
+    @classmethod
+    def _label_has_any(cls, label: str, phrases) -> bool:
+        return any(cls._label_has(label, phrase) for phrase in phrases)
+
+    @staticmethod
     def _player_key(text: str | None) -> str:
         if not text:
             return ""
@@ -319,13 +329,16 @@ class SofaScoreMatchProvider(MatchProvider):
                 continue
             if last_match_date is None or date_text > last_match_date:
                 last_match_date = date_text
-            rows.append(row)
+            rows.append((row, event))
 
         if not rows:
             return ProviderFetchResult(pd.DataFrame(), last_match_date, self.name)
-        df = pd.DataFrame(rows).sort_values("tourney_date", ascending=False)
+        rows.sort(key=lambda item: item[0]["tourney_date"], reverse=True)
         if max_matches is not None and max_matches > 0:
-            df = df.head(max_matches).reset_index(drop=True)
+            rows = rows[:max_matches]
+        for row, event in rows:
+            row.update(self._event_statistics_to_match_stats(event))
+        df = pd.DataFrame([row for row, _event in rows])
         return ProviderFetchResult(df, last_match_date, self.name)
 
     def _event_to_match_row(self, event: dict[str, Any], player_name: str,
@@ -421,6 +434,81 @@ class SofaScoreMatchProvider(MatchProvider):
             "is_upcoming": 0,
         }
 
+    def _event_statistics_to_match_stats(self, event: dict[str, Any]) -> dict[str, Any]:
+        event_id = event.get("id")
+        winner_code = event.get("winnerCode")
+        if not event_id or winner_code not in (1, 2):
+            return {}
+        try:
+            payload = self._get_json(f"/event/{event_id}/statistics")
+        except Exception as exc:
+            logger.info("SofaScore statistics failed for event %s: %s", event_id, exc)
+            return {}
+        raw_stats = self._home_away_statistics(payload)
+        if not raw_stats:
+            return {}
+
+        winner_side = "home" if winner_code == 1 else "away"
+        loser_side = "away" if winner_code == 1 else "home"
+        return {
+            "w_ace": self._stat_value(raw_stats, "aces", winner_side),
+            "w_df": self._stat_value(raw_stats, "doubleFaults", winner_side),
+            "w_svpt": self._stat_total(raw_stats, "firstServeAccuracy", winner_side),
+            "w_1stIn": self._stat_value(raw_stats, "firstServeAccuracy", winner_side),
+            "w_1stWon": self._stat_value(raw_stats, "firstServePointsAccuracy", winner_side),
+            "w_2ndWon": self._stat_value(raw_stats, "secondServePointsAccuracy", winner_side),
+            "w_SvGms": self._stat_value(raw_stats, "serviceGamesTotal", winner_side),
+            "w_bpSaved": self._stat_value(raw_stats, "breakPointsSaved", winner_side),
+            "w_bpFaced": self._stat_total(raw_stats, "breakPointsSaved", winner_side),
+            "l_ace": self._stat_value(raw_stats, "aces", loser_side),
+            "l_df": self._stat_value(raw_stats, "doubleFaults", loser_side),
+            "l_svpt": self._stat_total(raw_stats, "firstServeAccuracy", loser_side),
+            "l_1stIn": self._stat_value(raw_stats, "firstServeAccuracy", loser_side),
+            "l_1stWon": self._stat_value(raw_stats, "firstServePointsAccuracy", loser_side),
+            "l_2ndWon": self._stat_value(raw_stats, "secondServePointsAccuracy", loser_side),
+            "l_SvGms": self._stat_value(raw_stats, "serviceGamesTotal", loser_side),
+            "l_bpSaved": self._stat_value(raw_stats, "breakPointsSaved", loser_side),
+            "l_bpFaced": self._stat_total(raw_stats, "breakPointsSaved", loser_side),
+        }
+
+    @classmethod
+    def _home_away_statistics(cls, payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        stats: dict[str, dict[str, Any]] = {}
+        for period in payload.get("statistics") or []:
+            if cls._norm(period.get("period")) != "all":
+                continue
+            for group in period.get("groups") or []:
+                if cls._norm(group.get("groupName")) != "service":
+                    continue
+                for item in group.get("statisticsItems") or []:
+                    key = item.get("key")
+                    if key:
+                        stats[str(key)] = item
+            break
+        return stats
+
+    @classmethod
+    def _stat_value(cls, stats: dict[str, dict[str, Any]], key: str,
+                    side: str) -> float | None:
+        return cls._stat_number(stats, key, f"{side}Value", side)
+
+    @classmethod
+    def _stat_total(cls, stats: dict[str, dict[str, Any]], key: str,
+                    side: str) -> float | None:
+        return cls._stat_number(stats, key, f"{side}Total")
+
+    @staticmethod
+    def _stat_number(stats: dict[str, dict[str, Any]], key: str,
+                     *fields: str) -> float | None:
+        item = stats.get(key) or {}
+        for field in fields:
+            value = item.get(field)
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
     def _score_from_event(self, event: dict[str, Any], winner_code: int) -> str:
         home_score = event.get("homeScore") or {}
         away_score = event.get("awayScore") or {}
@@ -450,7 +538,7 @@ class SofaScoreMatchProvider(MatchProvider):
         if "round" in text and match:
             return f"R{match.group(1)}"
         label = self._event_label(event)
-        if "united cup" in label or "davis cup" in label or "billie jean" in label:
+        if self._label_has_any(label, ("united cup", "davis cup", "billie jean")):
             return "RR"
         return str(raw or "")
 
@@ -481,7 +569,7 @@ class SofaScoreMatchProvider(MatchProvider):
     def _is_doubles_event(self, event: dict[str, Any], home: dict[str, Any],
                           away: dict[str, Any], tourney_name: str) -> bool:
         label = self._event_label(event)
-        if "doubles" in label or " doubles" in self._norm(tourney_name):
+        if self._label_has(label, "doubles") or self._label_has(tourney_name, "doubles"):
             return True
         names = [
             str(home.get("name") or home.get("shortName") or ""),
@@ -492,14 +580,14 @@ class SofaScoreMatchProvider(MatchProvider):
     def _canonical_tourney_name(self, name: str, event: dict[str, Any],
                                 tour: str = "atp") -> str:
         label = self._event_label(event)
-        if "united cup" in label:
+        if self._label_has(label, "united cup"):
             return "United Cup"
-        if "delray beach" in label:
+        if self._label_has(label, "delray beach"):
             return "Delray Beach"
         for pattern, city, atp_name, wta_name in self._MASTERS_ALIAS_RULES:
-            if pattern in label:
+            if self._label_has(label, pattern):
                 level = self._level_from_event(event, tour=tour)
-                if "challenger" in label or level == "C":
+                if self._label_has(label, "challenger") or level == "C":
                     return f"{city} CH"
                 if str(level).isdigit():
                     return f"{'W' if tour == 'wta' else 'M'}{level} {city}"
@@ -508,14 +596,17 @@ class SofaScoreMatchProvider(MatchProvider):
                 if level in {"PM", "P", "W"}:
                     return wta_name
                 return wta_name if tour == "wta" else city
-        if "acapulco" in label:
+        if self._label_has(label, "acapulco"):
             return "Acapulco"
-        if "munich" in label:
+        if self._label_has(label, "munich"):
             return "Munich"
-        if "stuttgart" in label:
+        if self._label_has(label, "stuttgart"):
             return "Stuttgart"
         if ", " in name:
-            return name.split(", ", 1)[0]
+            name = name.split(", ", 1)[0]
+        level = self._level_from_event(event, tour=tour)
+        if level == "C" and not self._label_has(name, "CH"):
+            return f"{name} CH"
         return name
 
     def _surface_from_event(self, event: dict[str, Any], tour: str = "atp") -> str:
@@ -527,33 +618,33 @@ class SofaScoreMatchProvider(MatchProvider):
             if text in {"hard", "clay", "grass", "carpet"}:
                 return text.capitalize()
         label = self._event_label(event)
-        if "stuttgart" in label:
+        if self._label_has(label, "stuttgart"):
             return "Clay" if tour == "wta" else "Grass"
-        if any(name in label for name in self._CLAY_EVENTS):
+        if self._label_has_any(label, self._CLAY_EVENTS):
             return "Clay"
-        if any(name in label for name in self._GRASS_EVENTS):
+        if self._label_has_any(label, self._GRASS_EVENTS):
             return "Grass"
-        if any(name in label for name in self._HARD_EVENTS):
+        if self._label_has_any(label, self._HARD_EVENTS):
             return "Hard"
         return ""
 
     def _level_from_event(self, event: dict[str, Any], tour: str = "atp") -> str:
         label = self._event_label(event)
-        if any(slam in label for slam in self._SLAMS):
+        if self._label_has_any(label, self._SLAMS):
             return "G"
-        if "challenger" in label:
+        if self._label_has(label, "challenger"):
             return "C"
         itf_match = re.search(r"\b[wm](15|25|35|50|60|75|80|100|125)\b", label)
         if itf_match:
             return itf_match.group(1)
-        if "masters" in label or "1000" in label or any(
-                name in label for name in self._MASTERS_NAMES):
+        if (self._label_has(label, "masters") or self._label_has(label, "1000")
+                or self._label_has_any(label, self._MASTERS_NAMES)):
             return "PM" if tour == "wta" else "M"
-        if "finals" in label:
+        if self._label_has(label, "finals"):
             return "F"
-        if "davis" in label or "billie jean" in label:
+        if self._label_has(label, "davis") or self._label_has(label, "billie jean"):
             return "D"
-        if "olympic" in label:
+        if self._label_has(label, "olympic"):
             return "O"
         return LEVEL_MAP.get("A", "A") if tour == "atp" else "I"
 

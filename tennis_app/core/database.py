@@ -101,6 +101,12 @@ def _canonical_live_event_name(city, atp_name, wta_name, tour=None, level=None):
     return wta_name if is_wta else city
 
 
+def _label_has_phrase(label, phrase):
+    label_key = re.sub(r"[^a-z0-9]+", " ", str(label or "").lower()).strip()
+    phrase_key = re.sub(r"[^a-z0-9]+", " ", str(phrase or "").lower()).strip()
+    return bool(phrase_key and f" {phrase_key} " in f" {label_key} ")
+
+
 def _canonical_scraped_tourney_name(name, tour=None, level=None):
     """Map common live-provider tournament labels to TennisAbstract names."""
     if not isinstance(name, str) or not name.strip():
@@ -109,8 +115,8 @@ def _canonical_scraped_tourney_name(name, tour=None, level=None):
     label = re.sub(r"^(atp|wta)\s+", "", label).strip()
     level_text = str(level or "").strip().upper()
     for pattern, city, atp_name, wta_name in _MASTERS_ALIAS_RULES:
-        if pattern in label:
-            if "challenger" in label:
+        if _label_has_phrase(label, pattern):
+            if _label_has_phrase(label, "challenger"):
                 return f"{city} CH"
             return _canonical_live_event_name(
                 city, atp_name, wta_name, tour=tour, level=level_text)
