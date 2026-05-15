@@ -86,9 +86,9 @@ class _YearsWorker(QThread):
         self.finished.emit(result)
 
 ROUND_ORDER = {
-    "Q1": 0, "Q2": 1, "Q3": 2,
-    "R128": 3, "R64": 4, "R32": 5, "R16": 6,
-    "QF": 7, "SF": 8, "F": 9, "RR": 10, "ER": 11, "BR": 12,
+    "F": 0, "SF": 1, "QF": 2,
+    "R16": 3, "R32": 4, "R64": 5, "R128": 6,
+    "Q3": 7, "Q2": 8, "Q1": 9, "RR": 10, "ER": 11, "BR": 12,
 }
 
 
