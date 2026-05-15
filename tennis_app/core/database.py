@@ -710,6 +710,17 @@ class TennisDatabase:
                 "Failed to prune scraped provider duplicates "
                 "(non-fatal, will retry on next start)")
 
+        # One-shot migration: after canonicalizing scraped player names, fill
+        # missing id/IOC/rank metadata from players/rankings.  This repairs rows
+        # that were imported while a provider used a slightly different display
+        # name, e.g. SofaScore "Martin Damm Jr" vs DB "Martin Damm".
+        try:
+            self._migrate_backfill_scraped_player_metadata(cur)
+        except Exception:
+            logger.exception(
+                "Failed to backfill scraped player metadata "
+                "(non-fatal, will retry on next start)")
+
         # One-shot migration: fix scraped WTA matches stored with tour='atp'.
         # Uses the players table (which is correctly split by tour) to detect
         # WTA-only names and updates the tour field accordingly.
@@ -3633,6 +3644,89 @@ class TennisDatabase:
             logger.info(
                 "Pruned %d historical SofaScore rows shadowed by TennisAbstract",
                 deleted)
+
+    def _migrate_backfill_scraped_player_metadata(self, cur):
+        """Fill missing SCRAPED winner/loser IDs, IOC, and recent ranks."""
+        if _is_remote_conn(self.conn):
+            return  # remote cleanup is run explicitly to avoid startup cost
+
+        before = cur.execute("""
+            SELECT COUNT(*) FROM matches
+            WHERE tourney_id = 'SCRAPED'
+              AND (
+                COALESCE(winner_id, '') = '' OR COALESCE(loser_id, '') = ''
+                OR COALESCE(winner_ioc, '') = '' OR COALESCE(loser_ioc, '') = ''
+                OR winner_rank IS NULL OR loser_rank IS NULL
+              )
+        """).fetchone()[0]
+
+        for side in ("winner", "loser"):
+            cur.execute(f"""
+                UPDATE matches
+                SET {side}_id = COALESCE((
+                        SELECT p.player_id
+                        FROM players p
+                        WHERE p.tour = matches.tour
+                          AND p.name_first || ' ' || p.name_last = {side}_name
+                        LIMIT 1
+                    ), {side}_id),
+                    {side}_ioc = COALESCE((
+                        SELECT p.ioc
+                        FROM players p
+                        WHERE p.tour = matches.tour
+                          AND p.name_first || ' ' || p.name_last = {side}_name
+                        LIMIT 1
+                    ), {side}_ioc)
+                WHERE tourney_id = 'SCRAPED'
+                  AND (COALESCE({side}_id, '') = ''
+                       OR COALESCE({side}_ioc, '') = '')
+            """)
+            cur.execute(f"""
+                UPDATE matches
+                SET {side}_rank = COALESCE((
+                        SELECT r.rank
+                        FROM rankings r
+                        WHERE r.tour = matches.tour
+                          AND r.player_id = {side}_id
+                          AND r.rank IS NOT NULL
+                          AND (r.ranking_date = 'LIVE'
+                               OR r.ranking_date LIKE 'SCRAPED_%SINGLES')
+                        ORDER BY CASE WHEN r.ranking_date = 'LIVE' THEN 0 ELSE 1 END,
+                                 r.ranking_date DESC
+                        LIMIT 1
+                    ), {side}_rank),
+                    {side}_rank_points = COALESCE((
+                        SELECT r.points
+                        FROM rankings r
+                        WHERE r.tour = matches.tour
+                          AND r.player_id = {side}_id
+                          AND r.points IS NOT NULL
+                          AND (r.ranking_date = 'LIVE'
+                               OR r.ranking_date LIKE 'SCRAPED_%SINGLES')
+                        ORDER BY CASE WHEN r.ranking_date = 'LIVE' THEN 0 ELSE 1 END,
+                                 r.ranking_date DESC
+                        LIMIT 1
+                    ), {side}_rank_points)
+                WHERE tourney_id = 'SCRAPED'
+                  AND {side}_id IS NOT NULL
+                  AND {side}_id != ''
+                  AND ({side}_rank IS NULL OR {side}_rank_points IS NULL)
+            """)
+
+        after = cur.execute("""
+            SELECT COUNT(*) FROM matches
+            WHERE tourney_id = 'SCRAPED'
+              AND (
+                COALESCE(winner_id, '') = '' OR COALESCE(loser_id, '') = ''
+                OR COALESCE(winner_ioc, '') = '' OR COALESCE(loser_ioc, '') = ''
+                OR winner_rank IS NULL OR loser_rank IS NULL
+              )
+        """).fetchone()[0]
+        if before != after:
+            self.conn.commit()
+            logger.info(
+                "Backfilled scraped player metadata for %d match-side gaps",
+                before - after)
 
     def _migrate_fix_scraped_match_tour(self, cur):
         """Fix scraped matches that were saved with tour='atp' regardless of
