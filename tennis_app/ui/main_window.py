@@ -156,7 +156,7 @@ class MainWindow(QMainWindow):
         self.sofascore_btn = QPushButton("SofaScore Sync")
         self.sofascore_btn.setObjectName("accentBtn")
         self.sofascore_btn.setToolTip(
-            "Run the local SofaScore hybrid scrape to Turso, then sync it here.")
+            "Run the local SofaScore scrape to Turso, then sync it here.")
         self.sofascore_btn.clicked.connect(self._scrape_sofascore_cloud_data)
         bar_layout.addWidget(self.sofascore_btn)
 

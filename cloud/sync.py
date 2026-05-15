@@ -8,7 +8,7 @@ Strategy per table:
     matches        : DELETE WHERE tourney_id='SCRAPED'  → bulk INSERT cloud rows
     rankings       : DELETE WHERE ranking_date='LIVE'   → bulk INSERT cloud rows
     players        : INSERT OR REPLACE (PK player_id+tour)
-    scrape_cache   : DELETE * → INSERT cloud rows (PK player_name)
+    scrape_cache / scrape_cache_provider : DELETE * → INSERT cloud rows
     extended_stats_cache : same
     match_winners_errors / match_serve_speed / match_pbp_stats /
     match_mcp_serve / match_mcp_return / match_mcp_rally /
@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 # We mirror them by full-replace.
 FULL_REPLACE_TABLES = (
     "scrape_cache",
+    "scrape_cache_provider",
     "extended_stats_cache",
     "match_winners_errors",
     "match_serve_speed",

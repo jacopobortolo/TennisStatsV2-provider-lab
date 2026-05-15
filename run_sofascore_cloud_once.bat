@@ -6,7 +6,7 @@ set "PY=%~dp0.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=%~dp0..\TennisStatsV2\.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
 
-set "MATCH_PROVIDER=hybrid"
+set "MATCH_PROVIDER=sofascore"
 set "SOFASCORE_API_BASE_URL=http://127.0.0.1:8765/api/v1"
 set "SOFASCORE_EVENT_PAGES=1"
 set "PYTHONUTF8=1"
@@ -29,7 +29,7 @@ if not %ERRORLEVEL% EQU 0 (
 )
 
 echo Writing log to %LOGFILE%
-"%PY%" -m cloud.scrape_job --top 1000 --no-extended --min-year 2026 --match-provider hybrid --max-matches-per-player 10 > "%LOGFILE%" 2>&1
+"%PY%" -m cloud.scrape_job --top 1000 --no-extended --min-year 2026 --match-provider sofascore --max-matches-per-player 10 > "%LOGFILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
     echo SofaScore cloud scrape failed with exit code %RC%. See %LOGFILE%

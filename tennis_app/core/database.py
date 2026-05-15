@@ -260,6 +260,7 @@ class TennisDatabase:
                 winner_rank REAL, winner_rank_points REAL,
                 loser_rank REAL, loser_rank_points REAL,
                 tour TEXT,
+                scrape_provider TEXT,
                 is_upcoming INTEGER DEFAULT 0
             );
 
@@ -298,6 +299,19 @@ class TennisDatabase:
                 match_signature TEXT,
                 scrape_retry_count INTEGER DEFAULT 0,
                 next_scrape_after TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS scrape_cache_provider (
+                player_name TEXT NOT NULL,
+                scrape_provider TEXT NOT NULL,
+                last_scraped TEXT NOT NULL,
+                match_count INTEGER DEFAULT 0,
+                last_match_date TEXT,
+                activity_fingerprint TEXT,
+                match_signature TEXT,
+                scrape_retry_count INTEGER DEFAULT 0,
+                next_scrape_after TEXT,
+                PRIMARY KEY (player_name, scrape_provider)
             );
 
             CREATE TABLE IF NOT EXISTS doubles_matches (
@@ -581,6 +595,64 @@ class TennisDatabase:
             cur.execute("ALTER TABLE matches ADD COLUMN source_match_date TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+        try:
+            cur.execute("ALTER TABLE matches ADD COLUMN scrape_provider TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        if not _is_remote_conn(self.conn):
+            try:
+                cur.execute("""
+                    UPDATE matches
+                    SET scrape_provider = CASE
+                        WHEN winner_seed IS NULL THEN 'sofascore'
+                        ELSE 'tennisabstract'
+                    END
+                    WHERE tourney_id = 'SCRAPED'
+                      AND (scrape_provider IS NULL OR scrape_provider = '')
+                """)
+            except sqlite3.OperationalError:
+                pass
+        try:
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_matches_scrape_provider "
+                "ON matches(scrape_provider)")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS scrape_cache_provider (
+                    player_name TEXT NOT NULL,
+                    scrape_provider TEXT NOT NULL,
+                    last_scraped TEXT NOT NULL,
+                    match_count INTEGER DEFAULT 0,
+                    last_match_date TEXT,
+                    activity_fingerprint TEXT,
+                    match_signature TEXT,
+                    scrape_retry_count INTEGER DEFAULT 0,
+                    next_scrape_after TEXT,
+                    PRIMARY KEY (player_name, scrape_provider)
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_scrape_cache_provider_provider "
+                "ON scrape_cache_provider(scrape_provider)")
+        except sqlite3.OperationalError:
+            pass
+        if not _is_remote_conn(self.conn):
+            try:
+                cur.execute("""
+                    INSERT OR IGNORE INTO scrape_cache_provider (
+                        player_name, scrape_provider, last_scraped,
+                        match_count, last_match_date, activity_fingerprint,
+                        match_signature, scrape_retry_count, next_scrape_after
+                    )
+                    SELECT player_name, 'tennisabstract', last_scraped,
+                           match_count, last_match_date, activity_fingerprint,
+                           match_signature, scrape_retry_count, next_scrape_after
+                    FROM scrape_cache
+                """)
+            except sqlite3.OperationalError:
+                pass
         try:
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_matches_upcoming "
@@ -2481,6 +2553,24 @@ class TennisDatabase:
         # Mark scraped data so we can clear/refresh it separately
         matches_df["tourney_id"] = matches_df["tourney_id"].fillna("")
         matches_df.loc[matches_df["tourney_id"] == "", "tourney_id"] = "SCRAPED"
+        if "scrape_provider" not in matches_df.columns:
+            matches_df["scrape_provider"] = "tennisabstract"
+        matches_df["scrape_provider"] = (
+            matches_df["scrape_provider"].fillna("tennisabstract")
+            .astype(str).str.lower().str.strip()
+            .replace({
+                "": "tennisabstract",
+                "ta": "tennisabstract",
+                "tennis_abstract": "tennisabstract",
+                "sf": "sofascore",
+                "sofa": "sofascore",
+                "hybrid:sofascore": "sofascore",
+                "hybrid:tennisabstract": "tennisabstract",
+            })
+        )
+        incoming_providers = sorted(
+            p for p in matches_df["scrape_provider"].dropna().unique()
+            if p)
 
         # Identify all "main" players being imported.
         # When scraped_player_names is provided (from the scraper), use those
@@ -2509,14 +2599,22 @@ class TennisDatabase:
         # Skipped when replace_existing=False (incremental mode \u2014 we trust
         # the dedup LEFT JOIN below to avoid duplicates and preserve any
         # older SCRAPED rows already in the DB).
+        provider_expr = (
+            "CASE WHEN scrape_provider IS NOT NULL AND scrape_provider != '' "
+            "THEN scrape_provider "
+            "WHEN winner_seed IS NULL THEN 'sofascore' "
+            "ELSE 'tennisabstract' END"
+        )
         if scraped_players and replace_existing:
             placeholders = ",".join("?" for _ in scraped_players)
             player_list = list(scraped_players)
-            self.conn.execute(
-                f"DELETE FROM matches WHERE tourney_id = 'SCRAPED' "
-                f"AND (winner_name IN ({placeholders}) "
-                f"OR loser_name IN ({placeholders}))",
-                player_list + player_list)
+            for provider in incoming_providers:
+                self.conn.execute(
+                    f"DELETE FROM matches WHERE tourney_id = 'SCRAPED' "
+                    f"AND ({provider_expr}) = ? "
+                    f"AND (winner_name IN ({placeholders}) "
+                    f"OR loser_name IN ({placeholders}))",
+                    [provider] + player_list + player_list)
 
         # Always wipe stale upcoming rows for the scraped players, even
         # in incremental mode: when an upcoming match is finally played,
@@ -2555,23 +2653,37 @@ class TennisDatabase:
                     n_stale, today_str)
                 matches_df = matches_df[~stale_mask].copy()
 
-        # Remove duplicates within the DataFrame (same date + winner + loser + tourney)
+        # Remove duplicates within the DataFrame (same provider + date + players + tourney)
         matches_df = matches_df.drop_duplicates(
-            subset=["tourney_date", "winner_name", "loser_name", "tourney_name", "round"],
+            subset=[
+                "tourney_date", "winner_name", "loser_name",
+                "tourney_name", "round", "scrape_provider",
+            ],
             keep="first",
         )
 
-        # Avoid inserting matches that already exist (CSV or other scrapes).
-        # Use a temp table + LEFT JOIN instead of loading all 1.7M rows into Python.
-        # Lowercased tourney_name avoids duplicates like "Us Open" vs "US Open".
+        # Merge scraped providers match-by-match. TennisAbstract is the
+        # preferred source: it replaces matching SofaScore rows, while
+        # SofaScore never replaces an existing TennisAbstract row.
         # Unique staging name (UUID) so concurrent imports cannot collide.
         staging_name = f"_import_staging_{uuid.uuid4().hex[:12]}"
-        # On remote (Turso) connections the matches table contains only
-        # SCRAPED rows — no historical CSV imports — so we can scope the
-        # dedup JOIN to SCRAPED to massively reduce rows read.
-        join_extra = ""
-        if _is_remote_conn(self.conn):
-            join_extra = " AND m.tourney_id = 'SCRAPED'"
+        match_key = """
+                     COALESCE(m.tour, '') = COALESCE(s.tour, '')
+                 AND SUBSTR(m.tourney_date, 1, 4) = SUBSTR(s.tourney_date, 1, 4)
+                 AND m.winner_name = s.winner_name
+                 AND m.loser_name = s.loser_name
+                 AND LOWER(m.tourney_name) = LOWER(s.tourney_name)
+                 AND m.round = s.round
+        """
+        m_provider = (
+            "CASE WHEN m.scrape_provider IS NOT NULL AND m.scrape_provider != '' "
+            "THEN m.scrape_provider "
+            "WHEN m.winner_seed IS NULL THEN 'sofascore' "
+            "ELSE 'tennisabstract' END"
+        )
+        s_provider = (
+            "LOWER(COALESCE(NULLIF(s.scrape_provider, ''), 'tennisabstract'))"
+        )
         try:
             matches_df.to_sql(staging_name, self.conn, if_exists="replace", index=False)
             self.conn.execute(f"""
@@ -2580,11 +2692,35 @@ class TennisDatabase:
                     SELECT s.rowid
                     FROM {staging_name} s
                     JOIN matches m
-                      ON SUBSTR(m.tourney_date, 1, 4) = SUBSTR(s.tourney_date, 1, 4)
-                     AND m.winner_name = s.winner_name
-                     AND m.loser_name = s.loser_name
-                     AND LOWER(m.tourney_name) = LOWER(s.tourney_name)
-                     AND m.round = s.round{join_extra}
+                      ON {match_key}
+                    WHERE m.tourney_id != 'SCRAPED'
+                )
+            """)
+            self.conn.execute(f"""
+                DELETE FROM {staging_name}
+                WHERE rowid IN (
+                    SELECT s.rowid
+                    FROM {staging_name} s
+                    JOIN matches m
+                      ON {match_key}
+                    WHERE m.tourney_id = 'SCRAPED'
+                      AND {s_provider} = 'sofascore'
+                      AND ({m_provider}) = 'tennisabstract'
+                )
+            """)
+            self.conn.execute(f"""
+                DELETE FROM matches
+                WHERE rowid IN (
+                    SELECT m.rowid
+                    FROM matches m
+                    JOIN {staging_name} s
+                      ON {match_key}
+                    WHERE m.tourney_id = 'SCRAPED'
+                      AND (
+                        ({m_provider}) = {s_provider}
+                        OR ({s_provider} = 'tennisabstract'
+                            AND ({m_provider}) = 'sofascore')
+                      )
                 )
             """)
             count_row = self.conn.execute(
@@ -2935,7 +3071,8 @@ class TennisDatabase:
     # Scrape cache management
     # ------------------------------------------------------------------
 
-    def is_player_cache_valid(self, player_name, expire_hours=6):
+    def is_player_cache_valid(self, player_name, expire_hours=6,
+                              scrape_provider="tennisabstract"):
         """Check if a player's scraped data is still fresh.
 
         Simple time-based check: returns True if the player was scraped
@@ -2946,9 +3083,9 @@ class TennisDatabase:
         *expire_hours* = 0 always forces a refresh.
         """
         row = self.conn.execute(
-            "SELECT last_scraped FROM scrape_cache "
-            "WHERE player_name = ?",
-            (player_name,)
+            "SELECT last_scraped FROM scrape_cache_provider "
+            "WHERE player_name = ? AND scrape_provider = ?",
+            (player_name, scrape_provider)
         ).fetchone()
         if not row:
             return False
@@ -2961,7 +3098,8 @@ class TennisDatabase:
         except (ValueError, TypeError):
             return False
 
-    def has_new_activity(self, player_name, new_fingerprint):
+    def has_new_activity(self, player_name, new_fingerprint,
+                         scrape_provider="tennisabstract"):
         """Return True if the player's activity fingerprint has changed.
 
         The OFFICIAL rankings "previous" column concatenates results
@@ -2984,9 +3122,9 @@ class TennisDatabase:
         - a field merely cleared (went from something to empty)
         """
         row = self.conn.execute(
-            "SELECT activity_fingerprint FROM scrape_cache "
-            "WHERE player_name = ?",
-            (player_name,)
+            "SELECT activity_fingerprint FROM scrape_cache_provider "
+            "WHERE player_name = ? AND scrape_provider = ?",
+            (player_name, scrape_provider)
         ).fetchone()
         if not row or row[0] is None:
             return True  # never scraped or no fingerprint stored
@@ -3008,7 +3146,8 @@ class TennisDatabase:
                             match_signature=None,
                             activity_fingerprint=None,
                             scrape_retry_count=None,
-                            next_scrape_after=None):
+                            next_scrape_after=None,
+                            scrape_provider="tennisabstract"):
         """Record that a player was just scraped.
 
         If *activity_fingerprint* is None, the existing stored
@@ -3023,32 +3162,33 @@ class TennisDatabase:
         now_iso = datetime.now().isoformat()
         if activity_fingerprint is None:
             self.conn.execute(
-                "INSERT INTO scrape_cache "
-                "(player_name, last_scraped, match_count, "
+                "INSERT INTO scrape_cache_provider "
+                "(player_name, scrape_provider, last_scraped, match_count, "
                 "last_match_date, activity_fingerprint, match_signature) "
-                "VALUES (?, ?, ?, ?, NULL, ?) "
-                "ON CONFLICT(player_name) DO UPDATE SET "
+                "VALUES (?, ?, ?, ?, ?, NULL, ?) "
+                "ON CONFLICT(player_name, scrape_provider) DO UPDATE SET "
                 "last_scraped = excluded.last_scraped, "
                 "match_count = excluded.match_count, "
                 "last_match_date = COALESCE(excluded.last_match_date, "
-                "                          scrape_cache.last_match_date), "
+                "                          scrape_cache_provider.last_match_date), "
                 "match_signature = COALESCE(excluded.match_signature, "
-                "                           scrape_cache.match_signature), "
+                "                           scrape_cache_provider.match_signature), "
                 "scrape_retry_count = COALESCE(?, "
-                "                              scrape_cache.scrape_retry_count), "
+                "                              scrape_cache_provider.scrape_retry_count), "
                 "next_scrape_after = COALESCE(?, "
-                "                             scrape_cache.next_scrape_after)",
-                (player_name, now_iso, match_count, last_match_date,
-                 match_signature, scrape_retry_count, next_scrape_after)
+                "                             scrape_cache_provider.next_scrape_after)",
+                (player_name, scrape_provider, now_iso, match_count,
+                 last_match_date, match_signature, scrape_retry_count,
+                 next_scrape_after)
             )
         else:
             self.conn.execute(
-                "INSERT INTO scrape_cache "
-                "(player_name, last_scraped, match_count, last_match_date, "
+                "INSERT INTO scrape_cache_provider "
+                "(player_name, scrape_provider, last_scraped, match_count, last_match_date, "
                 "activity_fingerprint, match_signature, scrape_retry_count, "
                 "next_scrape_after) "
-                "VALUES (?, ?, ?, ?, ?, ?, 0, NULL) "
-                "ON CONFLICT(player_name) DO UPDATE SET "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL) "
+                "ON CONFLICT(player_name, scrape_provider) DO UPDATE SET "
                 "last_scraped = excluded.last_scraped, "
                 "match_count = excluded.match_count, "
                 "last_match_date = excluded.last_match_date, "
@@ -3056,22 +3196,24 @@ class TennisDatabase:
                 "match_signature = excluded.match_signature, "
                 "scrape_retry_count = 0, "
                 "next_scrape_after = NULL",
-                (player_name, now_iso, match_count,
+                (player_name, scrape_provider, now_iso, match_count,
                  last_match_date, activity_fingerprint, match_signature)
             )
         self.conn.commit()
 
-    def get_stale_players(self, player_names, expire_hours=6):
+    def get_stale_players(self, player_names, expire_hours=6,
+                          scrape_provider="tennisabstract"):
         """Return the subset of player_names whose cache is expired or missing."""
         if not player_names:
             return []
         stale = []
         for name in player_names:
-            if not self.is_player_cache_valid(name, expire_hours):
+            if not self.is_player_cache_valid(
+                    name, expire_hours, scrape_provider=scrape_provider):
                 stale.append(name)
         return stale
 
-    def get_all_scrape_cache(self):
+    def get_all_scrape_cache(self, scrape_provider="tennisabstract"):
         """Bulk-load the entire scrape_cache table.
 
         Returns a dict
@@ -3084,7 +3226,9 @@ class TennisDatabase:
             "SELECT player_name, last_scraped, activity_fingerprint, "
             "last_match_date, match_signature, scrape_retry_count, "
             "next_scrape_after "
-            "FROM scrape_cache"
+            "FROM scrape_cache_provider "
+            "WHERE scrape_provider = ?",
+            (scrape_provider,)
         ).fetchall()
         return {r[0]: (r[1], r[2], r[3], r[4], r[5] or 0, r[6])
                 for r in rows}

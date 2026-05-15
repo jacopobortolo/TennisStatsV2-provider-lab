@@ -185,6 +185,11 @@ def main(argv=None) -> int:
                 "WHERE match_count = 0 "
                 "AND (last_match_date IS NULL OR last_match_date = '') "
                 "AND (match_signature IS NULL OR match_signature = '')")
+            db.conn.execute(
+                "DELETE FROM scrape_cache_provider "
+                "WHERE match_count = 0 "
+                "AND (last_match_date IS NULL OR last_match_date = '') "
+                "AND (match_signature IS NULL OR match_signature = '')")
             db.conn.commit()
             logger.info("Empty scrape-cache purge complete")
         if args.seed_players_only:

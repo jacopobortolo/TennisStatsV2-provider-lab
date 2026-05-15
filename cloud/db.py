@@ -312,7 +312,7 @@ def _normalize_value(v):
 # (plus their schema) to keep the snapshot small.
 SNAPSHOT_TABLES = (
     "players", "matches", "rankings", "doubles_matches",
-    "scrape_cache", "extended_stats_cache",
+    "scrape_cache", "scrape_cache_provider", "extended_stats_cache",
     "match_winners_errors", "match_serve_speed", "match_pbp_stats",
     "match_mcp_serve", "match_mcp_return", "match_mcp_rally",
     "match_mcp_tactics",

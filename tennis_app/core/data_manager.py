@@ -353,6 +353,15 @@ def _fill_current_ranks(df, ranking_lookup):
     return df
 
 
+def _scrape_provider_key(provider_name):
+    text = str(provider_name or "tennisabstract").strip().lower()
+    if "sofascore" in text or text in {"sf", "sofa"}:
+        return "sofascore"
+    if "tennisabstract" in text or text in {"ta", "tennis_abstract"}:
+        return "tennisabstract"
+    return text or "tennisabstract"
+
+
 def scrape_player_matches(player_name, min_year=None, tour="atp",
                           max_matches=None, match_provider=None):
     """
@@ -375,6 +384,9 @@ def scrape_player_matches(player_name, min_year=None, tour="atp",
         player_name, min_year=min_year, tour=tour,
         max_matches=max_matches,
     )
+    if result.df is not None and not result.df.empty:
+        result.df = result.df.copy()
+        result.df["scrape_provider"] = _scrape_provider_key(result.provider)
     logger.debug(
         "Match provider %s returned %d rows for %s",
         result.provider, 0 if result.df is None else len(result.df),
@@ -822,6 +834,7 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
         "sf": "sofascore",
         "sofa": "sofascore",
     }.get(selected_match_provider, selected_match_provider)
+    cache_provider = _scrape_provider_key(selected_match_provider)
 
     report = {
         "tour": tour,
@@ -922,7 +935,8 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
 
     # Bulk-load the entire scrape_cache in ONE round-trip instead of
     # issuing two queries per player (1000+ remote calls for top-1000).
-    cache_snapshot = db.get_all_scrape_cache() if db is not None else {}
+    cache_snapshot = (db.get_all_scrape_cache(scrape_provider=cache_provider)
+                      if db is not None else {})
 
     def _scrape_cache_lookup(name):
         storage_name = clean_player_name(name) or name
@@ -1043,15 +1057,15 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
         now_iso = datetime.datetime.now().isoformat()
         with db._write_lock:
             db.conn.executemany(
-                "INSERT INTO scrape_cache "
-                "(player_name, last_scraped, match_count, "
+                "INSERT INTO scrape_cache_provider "
+                "(player_name, scrape_provider, last_scraped, match_count, "
                 "activity_fingerprint) "
-                "VALUES (?, ?, 0, ?) "
-                "ON CONFLICT(player_name) DO UPDATE SET "
+                "VALUES (?, ?, ?, 0, ?) "
+                "ON CONFLICT(player_name, scrape_provider) DO UPDATE SET "
                 "activity_fingerprint = excluded.activity_fingerprint, "
                 "scrape_retry_count = 0, "
                 "next_scrape_after = NULL",
-                [(n, now_iso, fp) for fp, n in skipped_updates])
+                [(n, cache_provider, now_iso, fp) for fp, n in skipped_updates])
             db.conn.commit()
 
     # ---- Parallel HTTP fetches for stale players ----
@@ -1167,6 +1181,7 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
                             activity_fingerprint=fp_to_store,
                             scrape_retry_count=retry_count,
                             next_scrape_after=next_scrape_after,
+                            scrape_provider=cache_provider,
                         )
                     except Exception as cache_exc:
                         logger.warning(
