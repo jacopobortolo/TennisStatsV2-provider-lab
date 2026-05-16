@@ -813,6 +813,9 @@ class GlobalStatsPage(QWidget):
         rows = result.get("rows") or []
         self._streak_meta = result.get("streaks_meta") or []
         self._all_rows = rows
+        columns = result.get("columns")
+        if columns:
+            self.result_table.set_column_headers(columns)
         self._apply_player_filter()
         note = result.get("note") or ""
         if note:

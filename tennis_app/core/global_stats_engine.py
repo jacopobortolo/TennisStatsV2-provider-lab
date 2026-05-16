@@ -1358,7 +1358,7 @@ class GlobalStatsEngine:
             for row in full_results
         ]
         return {
-            "columns": ["Rank", "Player", "Wins", "Period", "Service Holds", "Sets W-L"],
+            "columns": ["Rank", "Player", "Wins", "Period", "Service holds", "Sets W-L"],
             "rows": ranked_rows,
             "streaks_meta": streaks_meta,
             "note": "",

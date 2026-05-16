@@ -557,6 +557,16 @@ class DataTable(QTableWidget):
             self.blockSignals(False)
             self.setUpdatesEnabled(True)
 
+    def set_column_headers(self, headers: list[str]):
+        """Replace horizontal header labels (for stats with dynamic columns)."""
+        if not headers:
+            return
+        for i, text in enumerate(headers):
+            if i < self.columnCount():
+                item = self.horizontalHeaderItem(i)
+                if item is not None:
+                    item.setText(text)
+
 
 # ---------------------------------------------------------------------------
 # HeatmapTable — DataTable with cell-level color gradients
