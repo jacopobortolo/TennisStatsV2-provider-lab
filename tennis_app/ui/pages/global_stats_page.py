@@ -135,6 +135,10 @@ STAT_CATALOG = [
             "Striscia piu lunga di vittorie consecutive senza subire break, con totale dei turni di servizio tenuti.",
             "player, tournament_level, surface, season, era",
             "order matches by date; increment on wins with complete BP/service stats and zero breaks conceded"),
+    _stat("consecutive_games_no_break", "Consecutive service games without breaks", "streaks", "all_time",
+          "Serie piu lunga di game di servizio consecutivi tenuti senza subire break.",
+          "player, tournament_level, surface, season, era",
+          "order matches by date; sum service games held in wins with complete BP/service stats and zero breaks conceded"),
     _stat("loss_streak_overall", "Longest loss streak", "streaks", "all_time",
           "Striscia piu lunga di sconfitte consecutive in partite ATP/WTA.",
           "player, tournament_level, surface, season, era",
@@ -898,48 +902,63 @@ class GlobalStatsPage(QWidget):
         detail_item = self.result_table.item(row, 3)
         detail = detail_item.text() if detail_item else ""
         streak_type = meta.get("streak_type", "win")
-        if streak_type == "set":
-            title = f"{player} — {streak_len} sets consecutivi  ({detail})"
-            matches = GlobalStatsEngine(self.db).get_set_streak_matches(
-                player=meta["player"],
-                start_date=meta["start_date"],
-                end_date=meta["end_date"],
-                filters=self._current_filters(),
-                match_ids=meta.get("match_ids"),
-                set_indexes=meta.get("set_indexes"),
-            )
-            dlg = _SetStreakDetailDialog(title, matches, parent=self)
-        elif streak_type == "no_break_win":
-            title = f"{player} — {streak_len} wins without breaks  ({detail})"
-            matches = GlobalStatsEngine(self.db).get_no_break_streak_matches(
-                player=meta["player"],
-                start_date=meta["start_date"],
-                end_date=meta["end_date"],
-                filters=self._current_filters(),
-                match_ids=meta.get("match_ids"),
-            )
-            dlg = _WinStreakDetailDialog(title, matches, parent=self)
-        elif meta.get("group_attr") == "same_country":
-            title = f"{player} — {streak_len} wins vs same country  ({detail})"
-            matches = GlobalStatsEngine(self.db).get_same_country_streak_matches(
-                player=meta["player"],
-                start_date=meta["start_date"],
-                end_date=meta["end_date"],
-                filters=self._current_filters(),
-            )
-            dlg = _WinStreakDetailDialog(title, matches, parent=self)
-        else:
-            title = f"{player} — {streak_len} wins  ({detail})"
-            matches = GlobalStatsEngine(self.db).get_streak_matches(
-                player=meta["player"],
-                start_date=meta["start_date"],
-                end_date=meta["end_date"],
-                filters=self._current_filters(),
-                group_attr=meta["group_attr"],
-                group_value=meta["group_value"],
-            )
-            dlg = _WinStreakDetailDialog(title, matches, parent=self)
-        dlg.exec()
+        try:
+            if streak_type == "set":
+                title = f"{player} — {streak_len} sets consecutivi  ({detail})"
+                matches = GlobalStatsEngine(self.db).get_set_streak_matches(
+                    player=meta["player"],
+                    start_date=meta["start_date"],
+                    end_date=meta["end_date"],
+                    filters=self._current_filters(),
+                    match_ids=meta.get("match_ids"),
+                    set_indexes=meta.get("set_indexes"),
+                )
+                dlg = _SetStreakDetailDialog(title, matches, parent=self)
+            elif streak_type == "no_break_win":
+                title = f"{player} — {streak_len} wins without breaks  ({detail})"
+                matches = GlobalStatsEngine(self.db).get_no_break_streak_matches(
+                    player=meta["player"],
+                    start_date=meta["start_date"],
+                    end_date=meta["end_date"],
+                    filters=self._current_filters(),
+                    match_ids=meta.get("match_ids"),
+                )
+                dlg = _WinStreakDetailDialog(title, matches, parent=self)
+            elif streak_type == "no_break_games":
+                title = f"{player} — {streak_len} games without breaks  ({detail})"
+                matches = GlobalStatsEngine(self.db).get_no_break_games_streak_matches(
+                    player=meta["player"],
+                    start_date=meta["start_date"],
+                    end_date=meta["end_date"],
+                    filters=self._current_filters(),
+                    match_ids=meta.get("match_ids"),
+                )
+                dlg = _WinStreakDetailDialog(title, matches, parent=self)
+            elif meta.get("group_attr") == "same_country":
+                title = f"{player} — {streak_len} wins vs same country  ({detail})"
+                matches = GlobalStatsEngine(self.db).get_same_country_streak_matches(
+                    player=meta["player"],
+                    start_date=meta["start_date"],
+                    end_date=meta["end_date"],
+                    filters=self._current_filters(),
+                )
+                dlg = _WinStreakDetailDialog(title, matches, parent=self)
+            else:
+                title = f"{player} — {streak_len} wins  ({detail})"
+                matches = GlobalStatsEngine(self.db).get_streak_matches(
+                    player=meta["player"],
+                    start_date=meta["start_date"],
+                    end_date=meta["end_date"],
+                    filters=self._current_filters(),
+                    group_attr=meta["group_attr"],
+                    group_value=meta["group_value"],
+                )
+                dlg = _WinStreakDetailDialog(title, matches, parent=self)
+            dlg.exec()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Failed to open streak detail for %s: %s", player, exc)
 
     def _on_result_error(self, stat_id, request_id, message):
         if request_id != self._request_id:
@@ -1114,21 +1133,33 @@ class _WinStreakDetailDialog(QDialog):
                 score_str = m.get("score") or ""
                 date = str(m.get("tourney_date") or "")[:10]
                 breaks_conceded = int(m.get("breaks_conceded") or 0)
+                is_win = bool(m.get("won", True))  # default True for non-games streaks
 
-                # Parse sets — all matches here are wins (won=True)
+                # Parse sets
                 parsed = _ps(score_str)
                 sets_display = ""
-                if parsed:
+                sets_lost_count = 0
+                if parsed and is_win:
                     set_parts = []
-                    sets_lost_count = 0
                     for w_g, l_g, tb in parsed["set_scores"]:
-                        player_won_set = w_g > l_g   # always winner perspective
+                        player_won_set = w_g > l_g
                         if not player_won_set:
                             sets_lost_count += 1
                         pg, og = w_g, l_g
                         tb_str = f"({tb})" if tb is not None else ""
                         marker = "✓" if player_won_set else "✗"
                         set_parts.append(f"{marker}{pg}-{og}{tb_str}")
+                    sets_display = "  ".join(set_parts)
+                elif parsed and not is_win:
+                    # Loss: flip score perspective; winner's games are opponent's
+                    set_parts = []
+                    for w_g, l_g, tb in parsed["set_scores"]:
+                        player_lost_set = l_g < w_g  # player's games are fewer
+                        if player_lost_set:
+                            sets_lost_count += 1
+                        tb_str = f"({tb})" if tb is not None else ""
+                        marker = "✗"
+                        set_parts.append(f"{marker}{l_g}-{w_g}{tb_str}")
                     sets_display = "  ".join(set_parts)
                 else:
                     sets_lost_count = 0
@@ -1145,15 +1176,20 @@ class _WinStreakDetailDialog(QDialog):
                         holds_str = f"  [{holds_count} service holds]"
                     except (TypeError, ValueError):
                         holds_str = ""
+
+                result_marker = " L" if not is_win else ""
                 parts = [tourney, rnd, f"vs {opponent}" if opponent else "",
                          sets_display or score_str]
                 line_text = (
                     f"{i}.  {date}  —  "
-                    f"{',  '.join(p for p in parts if p)}{breaks_str}{holds_str}"
+                    f"{',  '.join(p for p in parts if p)}{result_marker}{breaks_str}{holds_str}"
                 )
 
                 lbl = QLabel(line_text)
-                if sets_lost_count:
+                if not is_win:
+                    text_color = "#e05555"
+                    bg_color = "#3a1a1a" if i % 2 else "#331515"
+                elif sets_lost_count:
                     text_color = "#e05555"
                     bg_color = "#3a1a1a" if i % 2 else "#331515"
                 elif breaks_conceded:
@@ -1177,7 +1213,7 @@ class _WinStreakDetailDialog(QDialog):
         scroll.setWidget(inner)
         layout.addWidget(scroll, 1)
 
-        legend = QLabel("✓ set vinto · ✗ set perso (rosso) · arancione = break subiti (senza set persi) · service holds quando disponibili")
+        legend = QLabel("✓ set vinto · ✗ set perso (rosso) · L sconfitta · arancione = break subiti (senza set persi) · service holds quando disponibili")
         legend.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 8pt;")
         layout.addWidget(legend)
 
