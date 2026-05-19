@@ -17,6 +17,8 @@ import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 
+from .wta_tournament_levels import infer_wta_level_from_name
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.tennisabstract.com"
@@ -1871,12 +1873,20 @@ def convert_scraped_to_db_format(raw_matches, player_name, min_year=None,
             surf_map = {"H": "Hard", "C": "Clay", "G": "Grass", "P": "Carpet"}
             surface_full = surf_map.get(surface, surface)
 
+            mapped_level = LEVEL_MAP.get(level, level)
+            if str(tour).lower() == "wta":
+                inferred_wta_level = infer_wta_level_from_name(
+                    tourney, year=date_str[:4]
+                )
+                if inferred_wta_level:
+                    mapped_level = inferred_wta_level
+
             records.append({
                 "tourney_id": "",
                 "tourney_name": tourney,
                 "surface": surface_full,
                 "draw_size": None,
-                "tourney_level": LEVEL_MAP.get(level, level),
+                "tourney_level": mapped_level,
                 "tourney_date": date_str,
                 "match_num": None,
                 "winner_id": "",

@@ -202,6 +202,35 @@ def _fix_numeric_wta_scraped_tour(local: sqlite3.Connection) -> int:
     return changed
 
 
+def _normalize_wta_scraped_levels(local: sqlite3.Connection) -> int:
+    from tennis_app.core.wta_tournament_levels import infer_wta_level_from_name
+
+    rows = local.execute(
+        """
+        SELECT rowid, tourney_name, tourney_date, tourney_level
+        FROM matches
+        WHERE tourney_id = 'SCRAPED'
+          AND tour = 'wta'
+          AND COALESCE(tourney_name, '') != ''
+        """
+    ).fetchall()
+
+    updates = []
+    for rowid, tourney_name, tourney_date, tourney_level in rows:
+        inferred_level = infer_wta_level_from_name(tourney_name, year=tourney_date)
+        if inferred_level and inferred_level != tourney_level:
+            updates.append((inferred_level, rowid))
+
+    if not updates:
+        return 0
+
+    local.executemany(
+        "UPDATE matches SET tourney_level = ? WHERE rowid = ?",
+        updates,
+    )
+    return len(updates)
+
+
 def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
     aliases = [
         ("monte carlo", "Monte Carlo", "Monte Carlo Masters", "Monte Carlo"),
@@ -263,6 +292,23 @@ def _canonicalize_scraped_matches(local: sqlite3.Connection) -> int:
             n_wta_tour,
         )
     changed += n_wta_tour
+
+    n_wta_levels = _normalize_wta_scraped_levels(local)
+    if n_wta_levels:
+        logger.info(
+            "  matches: normalized %d scraped WTA main-tour levels",
+            n_wta_levels,
+        )
+    changed += n_wta_levels
+
+    local.execute("""
+        UPDATE matches
+        SET tourney_level = 'C'
+        WHERE tourney_id = 'SCRAPED'
+          AND LOWER(TRIM(COALESCE(tourney_name, ''))) LIKE '% ch'
+          AND tourney_level != 'C'
+    """)
+    changed += local.execute("SELECT changes()").fetchone()[0]
 
     local.execute("""
         UPDATE matches

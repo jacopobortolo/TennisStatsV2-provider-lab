@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+import os
 import sys
 from datetime import datetime
 
@@ -134,14 +135,24 @@ def main(argv=None) -> int:
                         help="Max extended-stat players per tour/run")
     parser.add_argument("--inactive-extended-budget", type=int, default=20,
                         help="Max inactive time-based extended refreshes per tour/run")
-    parser.add_argument("--max-workers", type=int, default=8,
+    parser.add_argument("--max-workers", type=int, default=None,
                         help="Max parallel match-provider fetches")
     parser.add_argument("--max-matches-per-player", type=int, default=20,
                         help="Max recent matches to fetch/import per player")
     parser.add_argument("--min-year", type=int, default=2025)
+    parser.add_argument("--tour", default="both", choices=["atp", "wta", "both"],
+                        help="Tour to scrape (default both)")
     parser.add_argument("--match-provider", default=None,
                         choices=["tennisabstract", "sofascore", "hybrid"],
                         help="Live match provider for this lab copy")
+    parser.add_argument("--sofascore-sleep-min", type=float, default=None,
+                        help="Minimum random SofaScore request sleep in seconds")
+    parser.add_argument("--sofascore-sleep-max", type=float, default=None,
+                        help="Maximum random SofaScore request sleep in seconds")
+    parser.add_argument("--sofascore-403-breaker", type=int, default=None,
+                        help="Stop SofaScore after this many consecutive HTTP 403 responses")
+    parser.add_argument("--sofascore-403-backoff-max", type=float, default=None,
+                        help="Maximum adaptive SofaScore backoff in seconds after HTTP 403")
     parser.add_argument("--monday-boost", action="store_true",
                         help="(legacy, no-op — top is already full)")
     parser.add_argument("--purge-empty-scrape-cache", action="store_true",
@@ -157,6 +168,34 @@ def main(argv=None) -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    provider_key = (args.match_provider or os.getenv("MATCH_PROVIDER")
+                    or "tennisabstract").strip().lower()
+    provider_key = {
+        "sf": "sofascore",
+        "sofa": "sofascore",
+        "ta": "tennisabstract",
+        "tennis_abstract": "tennisabstract",
+    }.get(provider_key, provider_key)
+    uses_sofascore = provider_key in {"sofascore", "hybrid"}
+    if args.sofascore_sleep_min is not None:
+        os.environ["SOFASCORE_REQUEST_SLEEP_MIN"] = str(
+            max(0.0, float(args.sofascore_sleep_min)))
+    if args.sofascore_sleep_max is not None:
+        os.environ["SOFASCORE_REQUEST_SLEEP_MAX"] = str(
+            max(0.0, float(args.sofascore_sleep_max)))
+    if args.sofascore_403_breaker is not None:
+        os.environ["SOFASCORE_403_BREAKER"] = str(
+            max(1, int(args.sofascore_403_breaker)))
+    if args.sofascore_403_backoff_max is not None:
+        os.environ["SOFASCORE_403_BACKOFF_MAX"] = str(
+            max(0.0, float(args.sofascore_403_backoff_max)))
+
+    effective_max_workers = args.max_workers
+    if effective_max_workers is None:
+        effective_max_workers = 2 if uses_sofascore else 8
+    effective_max_workers = max(1, int(effective_max_workers))
+    tours = ("atp", "wta") if args.tour == "both" else (args.tour,)
+
     from .db import RemoteTennisDatabase
     from tennis_app.core.data_manager import (
         scrape_top_players_matches,
@@ -167,11 +206,19 @@ def main(argv=None) -> int:
     logger.info(
         "Cloud scrape: top_n=%d per tour, extended_budget=%d, "
         "inactive_extended_budget=%d, max_workers=%d, "
-        "max_matches_per_player=%d, match_provider=%s, ignore_cache=%s",
+        "max_matches_per_player=%d, match_provider=%s, tours=%s, ignore_cache=%s",
         top_n, args.extended_budget, args.inactive_extended_budget,
-        args.max_workers, args.max_matches_per_player,
-        args.match_provider or "env/default", args.ignore_cache,
+        effective_max_workers, args.max_matches_per_player,
+        args.match_provider or "env/default", ",".join(tours), args.ignore_cache,
     )
+    if uses_sofascore:
+        logger.info(
+            "SofaScore controls: sleep_min=%s sleep_max=%s breaker=%s backoff_max=%s",
+            os.getenv("SOFASCORE_REQUEST_SLEEP_MIN", "0"),
+            os.getenv("SOFASCORE_REQUEST_SLEEP_MAX", "0"),
+            os.getenv("SOFASCORE_403_BREAKER", "5"),
+            os.getenv("SOFASCORE_403_BACKOFF_MAX", "60"),
+        )
 
     db = RemoteTennisDatabase()
 
@@ -199,7 +246,7 @@ def main(argv=None) -> int:
         # historical CSVs into Turso (would take hours via HTTP).  Use local
         # mode for full archive queries; cloud mode = always-fresh top-N.
         tour_payloads = {}
-        for tour in ("atp", "wta"):
+        for tour in tours:
             logger.info("=== %s: scraping top %d ===", tour.upper(), top_n)
             scrape_result = scrape_top_players_matches(
                 top_n=top_n, tour=tour,
@@ -209,7 +256,7 @@ def main(argv=None) -> int:
                 cache_expire_hours=24,
                 min_year=args.min_year,
                 max_matches_per_player=args.max_matches_per_player,
-                max_workers=args.max_workers,
+                max_workers=effective_max_workers,
                 match_provider=args.match_provider,
                 ignore_cache=args.ignore_cache,
                 return_report=True,
@@ -234,7 +281,7 @@ def main(argv=None) -> int:
             for payload in tour_payloads.values()
         )
         if blocked:
-            for tour in ("atp", "wta"):
+            for tour in tours:
                 payload = tour_payloads.get(tour, {})
                 _log_tour_report(tour, payload.get("match_report", {}), None)
             logger.error(
@@ -243,7 +290,7 @@ def main(argv=None) -> int:
             return 1
 
         if not args.no_extended:
-            for tour in ("atp", "wta"):
+            for tour in tours:
                 logger.info("=== %s: extended stats (top %d) ===",
                             tour.upper(), top_n)
                 payload = tour_payloads.get(tour, {})

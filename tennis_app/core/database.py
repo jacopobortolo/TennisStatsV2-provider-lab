@@ -17,6 +17,7 @@ from .data_manager import (get_data_dir, load_players, load_matches,
                            load_rankings, load_doubles,
                            scrape_player_matches,
                            scrape_current_rankings, scrape_top_players_matches)
+from .wta_tournament_levels import infer_wta_level_from_name
 
 logger = logging.getLogger(__name__)
 
@@ -1209,7 +1210,6 @@ class TennisDatabase:
                        w_bpFaced as bp_faced
                 FROM matches WHERE {win_match}{tour_cond}
                   AND (is_upcoming = 0 OR is_upcoming IS NULL)
-                  AND UPPER(COALESCE(score,'')) NOT LIKE '%W/O%'
                 UNION ALL
                 SELECT 'L' as side, surface, tourney_level, round, tourney_date,
                        l_ace as aces, l_df as dfs, l_svpt as svpt,
@@ -1218,7 +1218,6 @@ class TennisDatabase:
                        l_bpFaced as bp_faced
                 FROM matches WHERE {lose_match}{tour_cond}
                   AND (is_upcoming = 0 OR is_upcoming IS NULL)
-                  AND UPPER(COALESCE(score,'')) NOT LIKE '%W/O%'
             )
             GROUP BY side, surface, tourney_level, round, yr
         """, win_params + tour_params + lose_params + tour_params).fetchall()
@@ -2537,6 +2536,23 @@ class TennisDatabase:
                     row.get("round"), row.get("tourney_level"),
                     row.get("scrape_provider"))
             matches_df["round"] = matches_df.apply(_canon_round_row, axis=1)
+        if "tour" in matches_df.columns and "tourney_name" in matches_df.columns:
+            if "tourney_level" not in matches_df.columns:
+                matches_df["tourney_level"] = None
+
+            def _infer_wta_level(row):
+                if row.get("tour") != "wta":
+                    return None
+                return infer_wta_level_from_name(
+                    row.get("tourney_name"), year=row.get("tourney_date")
+                )
+
+            inferred_wta_levels = matches_df.apply(_infer_wta_level, axis=1)
+            inferred_mask = inferred_wta_levels.notna()
+            if inferred_mask.any():
+                matches_df.loc[inferred_mask, "tourney_level"] = (
+                    inferred_wta_levels[inferred_mask]
+                )
 
         # Build a name→id and name→ioc cache from existing players.
         # Filter by tour when possible to halve the rows read on remote

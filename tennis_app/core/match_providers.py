@@ -14,6 +14,7 @@ import logging
 import os
 import random
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,8 @@ from .scraper import (
     clean_player_name,
     convert_scraped_to_db_format,
 )
+from .sofascore_http import build_sofascore_headers
+from .wta_tournament_levels import infer_wta_level_from_name
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +40,10 @@ MATCH_PROVIDER_ENV = "MATCH_PROVIDER"
 SOFASCORE_API_BASE_ENV = "SOFASCORE_API_BASE_URL"
 SOFASCORE_EVENT_PAGES_ENV = "SOFASCORE_EVENT_PAGES"
 SOFASCORE_PLAYER_ID_CACHE_ENV = "SOFASCORE_PLAYER_ID_CACHE"
+SOFASCORE_REQUEST_SLEEP_MIN_ENV = "SOFASCORE_REQUEST_SLEEP_MIN"
 SOFASCORE_REQUEST_SLEEP_MAX_ENV = "SOFASCORE_REQUEST_SLEEP_MAX"
 SOFASCORE_403_BREAKER_ENV = "SOFASCORE_403_BREAKER"
+SOFASCORE_403_BACKOFF_MAX_ENV = "SOFASCORE_403_BACKOFF_MAX"
 
 
 class SofaScoreAccessBlocked(RuntimeError):
@@ -199,45 +204,64 @@ class SofaScoreMatchProvider(MatchProvider):
         except ValueError:
             self.request_sleep_max = 0.0
         try:
+            self.request_sleep_min = max(
+                0.0, float(os.getenv(SOFASCORE_REQUEST_SLEEP_MIN_ENV, "0")))
+        except ValueError:
+            self.request_sleep_min = 0.0
+        self.request_sleep_min = min(self.request_sleep_min, self.request_sleep_max)
+        try:
             self.breaker_threshold = max(
                 1, int(os.getenv(SOFASCORE_403_BREAKER_ENV, "5")))
         except ValueError:
             self.breaker_threshold = 5
+        try:
+            self.backoff_max = max(
+                0.0, float(os.getenv(SOFASCORE_403_BACKOFF_MAX_ENV, "60")))
+        except ValueError:
+            self.backoff_max = 60.0
+        self._state_lock = threading.Lock()
+        self._cache_lock = threading.RLock()
         self._consecutive_403 = 0
+        self._last_403_at = 0.0
         self._player_id_cache = self._load_player_id_cache()
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/json,text/plain,*/*",
-            "Origin": "https://www.sofascore.com",
-            "Referer": "https://www.sofascore.com/",
-        })
+        self.session.headers.update(build_sofascore_headers())
 
     def _get_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         self._request_pause()
         url = f"{self.base_url}{path}"
         response = self.session.get(url, params=params, timeout=self.timeout)
         if response.status_code == 403:
-            self._consecutive_403 += 1
-            if self._consecutive_403 >= self.breaker_threshold:
+            with self._state_lock:
+                self._consecutive_403 += 1
+                self._last_403_at = time.time()
+                consecutive_403 = self._consecutive_403
+            if consecutive_403 >= self.breaker_threshold:
                 raise SofaScoreAccessBlocked(
                     "SofaScore returned HTTP 403 "
-                    f"{self._consecutive_403} times consecutively; "
+                    f"{consecutive_403} times consecutively; "
                     "stopping to avoid extending the block."
                 )
         elif response.status_code < 400:
-            self._consecutive_403 = 0
+            with self._state_lock:
+                self._consecutive_403 = 0
+                self._last_403_at = 0.0
         response.raise_for_status()
         return response.json()
 
     def _request_pause(self):
-        if self.request_sleep_max <= 0:
+        with self._state_lock:
+            consecutive_403 = self._consecutive_403
+        if self.request_sleep_max <= 0 and consecutive_403 <= 0:
             return
-        time.sleep(random.uniform(0.0, self.request_sleep_max))
+        pause = 0.0
+        if self.request_sleep_max > 0:
+            pause += random.uniform(self.request_sleep_min, self.request_sleep_max)
+        if consecutive_403 > 0 and self.backoff_max > 0:
+            backoff = min(self.backoff_max, 2 ** max(0, consecutive_403 - 1))
+            pause += random.uniform(backoff / 2, backoff)
+        if pause > 0:
+            time.sleep(pause)
 
     @staticmethod
     def _default_player_id_cache_path() -> Path:
@@ -260,16 +284,19 @@ class SofaScoreMatchProvider(MatchProvider):
 
     def _save_player_id_cache(self):
         path = self._player_id_cache_path()
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(
-                json.dumps(self._player_id_cache, ensure_ascii=False, indent=2, sort_keys=True),
-                encoding="utf-8",
-            )
-            tmp.replace(path)
-        except Exception as exc:
-            logger.info("Could not write SofaScore player ID cache %s: %s", path, exc)
+        with self._cache_lock:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(path.suffix + ".tmp")
+                tmp.write_text(
+                    json.dumps(
+                        self._player_id_cache, ensure_ascii=False,
+                        indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+                tmp.replace(path)
+            except Exception as exc:
+                logger.info("Could not write SofaScore player ID cache %s: %s", path, exc)
 
     @classmethod
     def _player_cache_key(cls, player_name: str, tour: str) -> str:
@@ -291,11 +318,12 @@ class SofaScoreMatchProvider(MatchProvider):
         if not entity_id:
             return
         key = self._player_cache_key(player_name, tour)
-        self._player_id_cache[key] = {
-            "id": entity_id,
-            "name": entity.get("name") or entity.get("shortName") or player_name,
-            "shortName": entity.get("shortName") or entity.get("name") or player_name,
-        }
+        with self._cache_lock:
+            self._player_id_cache[key] = {
+                "id": entity_id,
+                "name": entity.get("name") or entity.get("shortName") or player_name,
+                "shortName": entity.get("shortName") or entity.get("name") or player_name,
+            }
         self._save_player_id_cache()
 
     @staticmethod
@@ -521,14 +549,19 @@ class SofaScoreMatchProvider(MatchProvider):
         )
         if self._is_doubles_event(event, home, away, tourney_name):
             return None
-        tourney_name = self._canonical_tourney_name(tourney_name, event, tour)
+        event_year = date_text[:4] if date_text else None
+        tourney_name = self._canonical_tourney_name(
+            tourney_name, event, tour, event_year=event_year
+        )
 
         return {
             "tourney_id": "",
             "tourney_name": tourney_name,
             "surface": self._surface_from_event(event, tour=tour),
             "draw_size": None,
-            "tourney_level": self._level_from_event(event, tour=tour),
+            "tourney_level": self._level_from_event(
+                event, tour=tour, event_year=event_year
+            ),
             "tourney_date": date_text,
             "source_match_date": date_text,
             "match_num": None,
@@ -735,7 +768,8 @@ class SofaScoreMatchProvider(MatchProvider):
         return any("/" in name for name in names)
 
     def _canonical_tourney_name(self, name: str, event: dict[str, Any],
-                                tour: str = "atp") -> str:
+                                tour: str = "atp",
+                                event_year: str | None = None) -> str:
         label = self._tournament_label(event)
         if self._label_has(label, "united cup"):
             return "United Cup"
@@ -743,7 +777,9 @@ class SofaScoreMatchProvider(MatchProvider):
             return "Delray Beach"
         for pattern, city, atp_name, wta_name in self._MASTERS_ALIAS_RULES:
             if self._label_has(label, pattern):
-                level = self._level_from_event(event, tour=tour)
+                level = self._level_from_event(
+                    event, tour=tour, event_year=event_year
+                )
                 if self._label_has(label, "challenger") or level == "C":
                     return f"{city} CH"
                 if str(level).isdigit():
@@ -761,7 +797,7 @@ class SofaScoreMatchProvider(MatchProvider):
             return "Stuttgart"
         if ", " in name:
             name = name.split(", ", 1)[0]
-        level = self._level_from_event(event, tour=tour)
+        level = self._level_from_event(event, tour=tour, event_year=event_year)
         if level == "C" and str(tour).lower() == "atp":
             name = self._strip_challenger_suffix(name)
         if level == "C" and str(tour).lower() == "atp" and not self._label_has(name, "CH"):
@@ -793,7 +829,8 @@ class SofaScoreMatchProvider(MatchProvider):
             return "Hard"
         return ""
 
-    def _level_from_event(self, event: dict[str, Any], tour: str = "atp") -> str:
+    def _level_from_event(self, event: dict[str, Any], tour: str = "atp",
+                          event_year: str | None = None) -> str:
         label = self._tournament_label(event)
         if self._label_has_any(label, self._SLAMS):
             return "G"
@@ -802,6 +839,12 @@ class SofaScoreMatchProvider(MatchProvider):
         itf_match = re.search(r"\b[wm](15|25|35|50|60|75|80|100|125)\b", label)
         if itf_match:
             return itf_match.group(1)
+        if tour == "wta":
+            inferred_wta_level = infer_wta_level_from_name(
+                self._event_label(event), year=event_year
+            )
+            if inferred_wta_level:
+                return inferred_wta_level
         if (self._label_has(label, "masters") or self._label_has(label, "1000")
                 or self._label_has_any(label, self._MASTERS_NAMES)):
             return "PM" if tour == "wta" else "M"

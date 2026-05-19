@@ -10,13 +10,19 @@ from .stats_engine import parse_score
 
 LEVEL_LABELS = {
     "G": "Grand Slam",
-    "M": "Masters 1000",
-    "PM": "Premier Mandatory",
+    "M": "ATP Masters 1000",
+    "PM": "WTA 1000",
     "F": "Tour Finals",
     "E": "Elite Trophy",
     "A": "Tour-level",
-    "P": "Premier",
-    "I": "International",
+    "P": "WTA 500",
+    "I": "WTA International",
+    "W": "WTA 250",
+    "T1": "WTA Tier I",
+    "T2": "WTA Tier II",
+    "T3": "WTA Tier III",
+    "T4": "WTA Tier IV",
+    "T5": "WTA Tier V",
     "C": "Challenger",
     "D": "Team Cup",
     "O": "Olympics",
@@ -24,11 +30,12 @@ LEVEL_LABELS = {
 # Each UI label maps to a list of DB tourney_level codes (ATP + WTA equivalents)
 LEVEL_FILTERS = {
     "Grand Slam":      ["G"],
-    "Masters 1000":    ["M", "PM"],    # ATP Masters 1000 + WTA Premier Mandatory
+    "Masters 1000":    ["M", "PM", "T1"],    # ATP Masters 1000 + WTA 1000 equivalents
     "ATP/WTA Finals":  ["F", "E"],    # ATP/WTA Tour Finals + WTA Elite Trophy
     "Olympics":        ["O"],          # modern code; historical 'A' handled in _where
-    "ATP/WTA 500":     ["A", "P"],    # ATP 500 + WTA Premier
-    "DC/BJKC":       ["D"],         # DC/BJKC / Billie Jean King Cup
+    "ATP/WTA 500":     ["A", "P", "T2"],    # ATP 500 + WTA 500 equivalents incl. Tier II
+    "WTA 250":         ["W", "I", "T3", "T4", "T5"],    # WTA 250 + International + Tier III-V
+    "DC/BJKC":         ["D"],         # DC/BJKC / Billie Jean King Cup
     "Challenger":      ["C"],
 }
 

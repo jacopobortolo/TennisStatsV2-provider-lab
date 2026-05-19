@@ -23,6 +23,11 @@ import cloudscraper
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from tennis_app.core.sofascore_http import (
+    build_sofascore_headers,
+    describe_sofascore_headers,
+)
+
 try:
     from curl_cffi import requests as curl_requests
 except Exception:  # pragma: no cover - optional lab dependency
@@ -35,17 +40,7 @@ UPSTREAM_BASE = "https://www.sofascore.com/api/v1"
 app = FastAPI(title="TennisStats SofaScore Proxy", version="0.1-lab")
 
 _scraper = cloudscraper.create_scraper()
-_scraper.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json,text/plain,*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Origin": "https://www.sofascore.com",
-    "Referer": "https://www.sofascore.com/",
-})
+_scraper.headers.update(build_sofascore_headers())
 
 _CACHE: dict[tuple[str, tuple[tuple[str, str], ...]], tuple[float, Any]] = {}
 _CACHE_SECONDS = 120
@@ -143,6 +138,8 @@ def main(argv=None) -> int:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    logger.info("SofaScore proxy HTTP profile: %s",
+                describe_sofascore_headers(_scraper.headers))
 
     import uvicorn
 

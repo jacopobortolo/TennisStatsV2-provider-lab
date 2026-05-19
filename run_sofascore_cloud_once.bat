@@ -8,7 +8,12 @@ if not exist "%PY%" set "PY=python"
 
 set "MATCH_PROVIDER=sofascore"
 set "SOFASCORE_API_BASE_URL=http://127.0.0.1:8765/api/v1"
+set "SOFASCORE_HTTP_PROFILE=it-ch"
 set "SOFASCORE_EVENT_PAGES=1"
+set "SOFASCORE_REQUEST_SLEEP_MIN=1.5"
+set "SOFASCORE_REQUEST_SLEEP_MAX=8"
+set "SOFASCORE_403_BREAKER=3"
+set "SOFASCORE_403_BACKOFF_MAX=120"
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 
@@ -40,7 +45,7 @@ if "%SOFASCORE_CLOUD_DRY_RUN%"=="1" (
 )
 
 echo Writing log to %LOGFILE%
-"%PY%" -m cloud.scrape_job --top 1000 --no-extended --min-year 2026 --match-provider sofascore --max-matches-per-player 10 > "%LOGFILE%" 2>&1
+"%PY%" -m cloud.scrape_job --top 1000 --no-extended --min-year 2026 --match-provider sofascore --max-workers 2 --max-matches-per-player 10 --sofascore-sleep-min 1.5 --sofascore-sleep-max 8 --sofascore-403-breaker 3 --sofascore-403-backoff-max 120 > "%LOGFILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
     echo SofaScore cloud scrape failed with exit code %RC%. See %LOGFILE%

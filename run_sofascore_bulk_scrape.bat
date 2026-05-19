@@ -9,6 +9,7 @@ if not exist "%PY%" set "PY=python"
 set "PYTHONUNBUFFERED=1"
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
+set "SOFASCORE_HTTP_PROFILE=it-ch"
 
 echo SofaScore bulk scrape - requires local proxy on http://127.0.0.1:8765
 echo.

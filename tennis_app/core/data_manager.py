@@ -11,7 +11,7 @@ import re
 import time
 import logging
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from pathlib import Path
 
 import requests
@@ -23,6 +23,7 @@ from .scraper import (
     clean_player_name,
 )
 from .match_providers import MATCH_PROVIDER_ENV, get_match_provider
+from .match_providers import SofaScoreAccessBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -1094,22 +1095,49 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
 
     if total_to_scrape > 0:
         with ThreadPoolExecutor(max_workers=worker_count) as pool:
-            futures = {pool.submit(_fetch_one, entry): entry
-                       for _, entry in actual_targets}
-            for future in as_completed(futures):
+            pending = {}
+            target_iter = iter(actual_targets)
+
+            def _submit_next():
+                try:
+                    _, next_entry = next(target_iter)
+                except StopIteration:
+                    return False
+                pending[pool.submit(_fetch_one, next_entry)] = next_entry
+                return True
+
+            for _ in range(worker_count):
+                if not _submit_next():
+                    break
+
+            while pending:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                stop_after_block = False
+                for future in done:
+                    entry = pending.pop(future)
                 scrape_idx += 1
                 name, df, last_match_date, match_signature, exc = future.result()
 
                 if progress_callback:
                     progress_callback(scrape_idx, total_to_scrape,
-                                      f"Scraped {name} "
+                                      f"Processed {name} "
                                       f"({scrape_idx}/{total_to_scrape})")
 
                 if exc is not None:
                     logger.warning("Failed to scrape %s: %s", name, exc)
                     report["errors"] += 1
-                    if isinstance(exc, TennisAbstractAccessError):
+                    if isinstance(exc, (TennisAbstractAccessError, SofaScoreAccessBlocked)):
                         report["access_blocked"] += 1
+                    if isinstance(exc, SofaScoreAccessBlocked):
+                        stop_after_block = True
+                        logger.warning(
+                            "Stopping %s scrape early after SofaScore access block; "
+                            "cancelling %d pending player fetches",
+                            str(tour).upper(), len(pending))
+                        for pending_future in pending:
+                            pending_future.cancel()
+                        pending.clear()
+                        break
                     continue
                 report["attempted"] += 1
 
@@ -1173,7 +1201,7 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
                 if (fp_to_store is None and needs_confirmed_activity
                         and had_cache and not ta_not_found):
                     retry_count, next_scrape_after = _next_retry_state(
-                        cache_row, futures[future].get("rank"))
+                        cache_row, entry.get("rank"))
                 if db is not None:
                     try:
                         db.update_scrape_cache(
@@ -1218,6 +1246,12 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
                             "(fingerprint preserved for retry)", name)
                     else:
                         logger.info("No recent matches for %s", name)
+
+                if stop_after_block:
+                    break
+
+                if not _submit_next():
+                    continue
 
     if progress_callback:
         progress_callback(len(stale), len(stale), "Scraping complete!")
