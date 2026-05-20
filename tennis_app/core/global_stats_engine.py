@@ -739,6 +739,139 @@ class GlobalStatsEngine:
             ),
         }
 
+    def _stat_sunshine_double(self, filters, limit):
+        return self._same_season_title_sweep(
+            filters,
+            limit,
+            event_aliases={
+                "Indian Wells": {"indian wells", "indian wells masters"},
+                "Miami": {"miami", "miami masters"},
+            },
+            allowed_levels={"M", "PM"},
+            note=(
+                "Completions = seasons with titles at Indian Wells and Miami. "
+                "Age at 1st = age on the later title date of the first completed season."
+            ),
+        )
+
+    def _stat_clay_masters_sweep(self, filters, limit):
+        return self._same_season_title_sweep(
+            filters,
+            limit,
+            event_aliases={
+                "Monte Carlo": {"monte carlo", "monte carlo masters"},
+                "Madrid": {"madrid", "madrid masters"},
+                "Rome": {"rome", "rome masters", "italian open"},
+            },
+            allowed_levels={"M"},
+            note=(
+                "Completions = seasons with titles at Monte Carlo, Madrid, and Rome. "
+                "Age at 1st = age on the later title date of the first completed season."
+            ),
+        )
+
+    def _same_season_title_sweep(self, filters, limit, event_aliases,
+                                 allowed_levels=None, note=""):
+        where, params = self._where(filters, include_level=False)
+        case_parts = []
+        case_params = []
+        for event_label, aliases in event_aliases.items():
+            alias_list = sorted({str(alias).lower() for alias in aliases})
+            placeholders = ", ".join("?" for _ in alias_list)
+            case_parts.append(f"WHEN LOWER(m.tourney_name) IN ({placeholders}) THEN ?")
+            case_params.extend(alias_list)
+            case_params.append(event_label)
+
+        all_aliases = sorted({str(alias).lower() for values in event_aliases.values() for alias in values})
+        event_placeholders = ", ".join("?" for _ in all_aliases)
+        trailing_params = list(all_aliases)
+
+        level_sql = ""
+        if allowed_levels:
+            level_list = sorted({str(level) for level in allowed_levels})
+            level_placeholders = ", ".join("?" for _ in level_list)
+            level_sql = f" AND m.tourney_level IN ({level_placeholders})"
+            trailing_params.extend(level_list)
+
+        rows = self._query(f"""
+            WITH raw_titles AS (
+                SELECT COALESCE(NULLIF(m.winner_id, ''), m.winner_name) AS player_key,
+                       m.winner_name AS player,
+                       SUBSTR(m.tourney_date, 1, 4) AS season,
+                       CASE
+                           {' '.join(case_parts)}
+                       END AS event_group,
+                       m.tourney_date AS win_date
+                FROM matches m
+                WHERE {where}
+                  AND m.round = 'F'
+                  AND m.winner_name != ''
+                  AND LOWER(m.tourney_name) IN ({event_placeholders})
+                  {level_sql}
+            ),
+            titled_events AS (
+                SELECT player_key,
+                       MAX(player) AS player,
+                       season,
+                       event_group,
+                       MIN(win_date) AS win_date
+                FROM raw_titles
+                GROUP BY player_key, season, event_group
+            ),
+            completed_seasons AS (
+                SELECT player_key,
+                       MAX(player) AS player,
+                       season,
+                       COUNT(DISTINCT event_group) AS completed_events,
+                       MAX(win_date) AS completion_date
+                FROM titled_events
+                GROUP BY player_key, season
+                HAVING completed_events = ?
+            ),
+            player_summary AS (
+                SELECT player_key,
+                       MAX(player) AS player,
+                       COUNT(*) AS completions,
+                       MIN(completion_date) AS first_completion_date
+                FROM completed_seasons
+                GROUP BY player_key
+            )
+            SELECT ps.player,
+                   ps.completions,
+                   ps.first_completion_date,
+                   p.dob
+            FROM player_summary ps
+            LEFT JOIN (
+                SELECT player_id, MAX(dob) AS dob
+                FROM players
+                GROUP BY player_id
+            ) p ON p.player_id = ps.player_key
+            ORDER BY ps.completions DESC, ps.player ASC
+            LIMIT ?
+        """, case_params + params + trailing_params + [len(event_aliases), limit])
+
+        result_rows = []
+        for row in rows:
+            age_str = ""
+            if row["first_completion_date"] and row["dob"]:
+                try:
+                    completion_date = datetime.strptime(
+                        str(row["first_completion_date"])[:8], "%Y%m%d")
+                    dob_date = datetime.strptime(str(row["dob"])[:8], "%Y%m%d")
+                    years = completion_date.year - dob_date.year
+                    if (completion_date.month, completion_date.day) < (dob_date.month, dob_date.day):
+                        years -= 1
+                    age_str = str(years)
+                except (ValueError, TypeError):
+                    pass
+            result_rows.append((row["player"], row["completions"], age_str))
+
+        return {
+            "columns": ["Rank", "Player", "Completions", "Age at 1st"],
+            "rows": self._rank_rows(result_rows, limit),
+            "note": note,
+        }
+
     def _title_boxset(self, filters, limit, names, level=None):
         where, params = self._where(filters, include_level=False)
         placeholders = ",".join("?" for _ in names)
