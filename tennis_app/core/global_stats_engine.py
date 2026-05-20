@@ -598,24 +598,146 @@ class GlobalStatsEngine:
         return [(r["player"], r["value"], "QF/SF event appearances") for r in rows]
 
     def _stat_slam_boxset(self, filters, limit):
-        return self._title_boxset(filters, limit, {
-            "Australian Open", "Roland Garros", "Wimbledon", "US Open"
-        }, level="G")
+        """Career Grand Slam boxset: completions count & age at first completion.
 
-    def _stat_golden_masters(self, filters, limit):
+        A *completion* means winning all 4 Grand Slam tournaments at least once.
+        The number of cycle-completions is the minimum title count across a
+        player's 4 distinct Slam events.
+        """
         where, params = self._where(filters, include_level=False)
         rows = self._query(f"""
-            SELECT winner_name AS player,
-                   COUNT(DISTINCT tourney_name) AS value,
-                   GROUP_CONCAT(DISTINCT tourney_name) AS detail
-            FROM matches m
-            WHERE {where} AND round='F' AND tourney_level='M' AND winner_name != ''
-            GROUP BY winner_name
-            HAVING value >= 9
-            ORDER BY value DESC, player ASC
+            WITH slam_wins AS (
+                SELECT COALESCE(NULLIF(m.winner_id, ''), m.winner_name) AS player_key,
+                       MAX(m.winner_name) AS winner_name,
+                       LOWER(m.tourney_name) AS tourney_name,
+                       COUNT(*) AS win_count,
+                       MIN(m.tourney_date) AS first_win_date
+                FROM matches m
+                WHERE {where}
+                  AND m.round = 'F'
+                  AND m.tourney_level = 'G'
+                  AND m.winner_name != ''
+                GROUP BY player_key, LOWER(m.tourney_name)
+            ),
+            player_summary AS (
+                SELECT player_key,
+                       MAX(winner_name) AS player,
+                       COUNT(DISTINCT tourney_name) AS distinct_slams,
+                       MIN(win_count) AS completions,
+                       MAX(first_win_date) AS completion_date
+                FROM slam_wins
+                GROUP BY player_key
+                HAVING distinct_slams >= 4
+            )
+            SELECT ps.player,
+                   ps.completions,
+                   ps.completion_date,
+                   ps.player_key,
+                   p.dob
+            FROM player_summary ps
+            LEFT JOIN (SELECT player_id, MAX(dob) AS dob
+                       FROM players GROUP BY player_id) p
+              ON p.player_id = ps.player_key
+            ORDER BY ps.completions DESC, ps.player ASC
             LIMIT ?
         """, params + [limit])
-        return [(r["player"], r["value"], r["detail"] or "") for r in rows]
+
+        result_rows = []
+        for r in rows:
+            age_str = ""
+            if r["completion_date"] and r["dob"]:
+                try:
+                    comp_date = datetime.strptime(
+                        str(r["completion_date"])[:8], "%Y%m%d")
+                    dob_date = datetime.strptime(
+                        str(r["dob"])[:8], "%Y%m%d")
+                    years = comp_date.year - dob_date.year
+                    if (comp_date.month, comp_date.day) < (dob_date.month, dob_date.day):
+                        years -= 1
+                    age_str = str(years)
+                except (ValueError, TypeError):
+                    pass
+
+            result_rows.append((r["player"], r["completions"], age_str))
+
+        return {
+            "columns": ["Rank", "Player", "Completions", "Age at 1st"],
+            "rows": self._rank_rows(result_rows, limit),
+            "note": (
+                "Completions = min Slam titles across all 4 events. "
+                "Age at 1st = age when the last missing Slam was first won."
+            ),
+        }
+
+    def _stat_golden_masters(self, filters, limit):
+        """Career Golden Masters: completions count & age at first completion.
+
+        A *completion* means winning every one of the 9 ATP Masters 1000
+        tournaments at least once.  The number of cycle-completions is the
+        minimum title count across a player's 9 distinct Masters events.
+        """
+        where, params = self._where(filters, include_level=False)
+        rows = self._query(f"""
+            WITH master_wins AS (
+                SELECT COALESCE(NULLIF(m.winner_id, ''), m.winner_name) AS player_key,
+                       MAX(m.winner_name) AS winner_name,
+                       LOWER(m.tourney_name) AS tourney_name,
+                       COUNT(*) AS win_count,
+                       MIN(m.tourney_date) AS first_win_date
+                FROM matches m
+                WHERE {where}
+                  AND m.round = 'F'
+                  AND m.tourney_level = 'M'
+                  AND m.winner_name != ''
+                GROUP BY player_key, LOWER(m.tourney_name)
+            ),
+            player_summary AS (
+                SELECT player_key,
+                       MAX(winner_name) AS player,
+                       COUNT(DISTINCT tourney_name) AS distinct_masters,
+                       MIN(win_count) AS completions,
+                       MAX(first_win_date) AS completion_date
+                FROM master_wins
+                GROUP BY player_key
+                HAVING distinct_masters >= 9
+            )
+            SELECT ps.player,
+                   ps.completions,
+                   ps.completion_date,
+                   ps.player_key,
+                   p.dob
+            FROM player_summary ps
+            LEFT JOIN players p ON p.player_id = ps.player_key AND p.tour = 'atp'
+            ORDER BY ps.completions DESC, ps.player ASC
+            LIMIT ?
+        """, params + [limit])
+
+        result_rows = []
+        for r in rows:
+            age_str = ""
+            if r["completion_date"] and r["dob"]:
+                try:
+                    comp_date = datetime.strptime(
+                        str(r["completion_date"])[:8], "%Y%m%d")
+                    dob_date = datetime.strptime(
+                        str(r["dob"])[:8], "%Y%m%d")
+                    years = comp_date.year - dob_date.year
+                    if (comp_date.month, comp_date.day) < (dob_date.month, dob_date.day):
+                        years -= 1
+                    age_str = str(years)
+                except (ValueError, TypeError):
+                    pass
+
+            result_rows.append((r["player"], r["completions"], age_str))
+
+        return {
+            "columns": ["Rank", "Player", "Completions", "Age at 1st"],
+            "rows": self._rank_rows(result_rows, limit),
+            "note": (
+                "Completions = min Masters titles across all 9 events. "
+                "Age at 1st = age when the last missing Masters was first won."
+            ),
+        }
 
     def _title_boxset(self, filters, limit, names, level=None):
         where, params = self._where(filters, include_level=False)

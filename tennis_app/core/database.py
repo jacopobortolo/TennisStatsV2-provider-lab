@@ -68,7 +68,8 @@ def _strip_player_seed_marker(name):
     if not isinstance(name, str):
         return name
     return re.sub(
-        r"\s*\((?:\d+|PR|Q|WC|LL|SE|ALT)\)\s*$",
+        r"\s*\((?:(?:\d+)(?:\s*/\s*(?:PR|Q|WC|LL|SE|ALT))?|"
+        r"(?:PR|Q|WC|LL|SE|ALT))\)\s*$",
         "",
         name.strip(),
         flags=re.IGNORECASE,
@@ -90,6 +91,44 @@ _MASTERS_ALIAS_RULES = [
 _PLAYER_NAME_ALIASES = {
     "jeffrey john wolf": "J J Wolf",
 }
+
+
+# Tourney-name suffixes that should keep their ATP/WTA prefix
+# (matched with .startswith against the stripped lowercased rest).
+_PROTECTED_TOURNEY_SUFFIXES = [
+    "cup", "tour championships", "championships",
+    "finals", "challenger",
+]
+
+
+def _normalize_tourney_name(name):
+    """Strip leading 'ATP ' / 'WTA ' unless it is a known proper name."""
+    if not isinstance(name, str):
+        return name
+    value = name.strip()
+    upper_value = value.upper()
+    for prefix in ("ATP ", "WTA "):
+        if upper_value.startswith(prefix):
+            rest = value[len(prefix):].strip()
+            if not any(rest.lower().startswith(p)
+                       for p in _PROTECTED_TOURNEY_SUFFIXES):
+                return rest
+    return value
+
+
+def _tourney_name_sql_key(expr):
+    """SQLite expression for comparing normalized tournament names."""
+    trimmed = f"TRIM(COALESCE({expr}, ''))"
+    rest = f"TRIM(SUBSTR({trimmed}, 5))"
+    protected = " OR ".join(
+        f"LOWER({rest}) LIKE '{suffix}%'"
+        for suffix in _PROTECTED_TOURNEY_SUFFIXES
+    )
+    return (
+        f"LOWER(CASE WHEN UPPER(SUBSTR({trimmed}, 1, 4)) "
+        f"IN ('ATP ', 'WTA ') AND NOT ({protected}) "
+        f"THEN {rest} ELSE {trimmed} END)"
+    )
 
 
 def _canonical_player_alias(name):
@@ -130,6 +169,7 @@ def _canonical_scraped_tourney_name(name, tour=None, level=None):
     """Map common live-provider tournament labels to TennisAbstract names."""
     if not isinstance(name, str) or not name.strip():
         return name
+    name = name.strip()
     label = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
     label = re.sub(r"^(atp|wta)\s+", "", label).strip()
     level_text = str(level or "").strip().upper()
@@ -142,7 +182,7 @@ def _canonical_scraped_tourney_name(name, tour=None, level=None):
                 city, atp_name, wta_name, tour=tour, level=level_text)
     if is_atp and level_text == "C":
         return _canonical_atp_challenger_name(name)
-    return name.strip()
+    return _normalize_tourney_name(name)
 
 
 def _sofascore_round_from_ordinal(ordinal):
@@ -842,7 +882,7 @@ class TennisDatabase:
             # Caused by scraper using per-match dates vs CSV using tourney-start date.
             logger.info("Removing SCRAPED duplicate rows shadowing CSV data (version 4)...")
             try:
-                self.conn.execute("""
+                self.conn.execute(f"""
                     DELETE FROM matches
                     WHERE tourney_id = 'SCRAPED'
                       AND rowid IN (
@@ -1816,8 +1856,14 @@ class TennisDatabase:
         conditions = []
         params = []
         if tourney_name:
-            conditions.append("tourney_name = ?")
-            params.append(tourney_name)
+            variants = {tourney_name}
+            for prefix in ("ATP ", "WTA "):
+                variants.add(prefix + tourney_name)
+                if tourney_name.startswith(prefix):
+                    variants.add(tourney_name[len(prefix):])
+            ph = ", ".join("?" for _ in variants)
+            conditions.append(f"tourney_name IN ({ph})")
+            params.extend(sorted(variants))
         if year:
             conditions.append("tourney_date BETWEEN ? AND ?")
             params.extend([f"{year}0000", f"{year}9999"])
@@ -1846,7 +1892,16 @@ class TennisDatabase:
                 END,
                 match_num DESC
         """, params)
-        results = [dict(r) for r in cur.fetchall()]
+        results = []
+        seen = set()
+        for r in cur.fetchall():
+            d = dict(r)
+            key = (_player_match_key(d.get("winner_name") or ""),
+                   _player_match_key(d.get("loser_name") or ""),
+                   d.get("round") or "", (d.get("score") or "").strip())
+            if key not in seen:
+                seen.add(key)
+                results.append(d)
         self._fill_missing_ranks(results)
         return results
 
@@ -1856,8 +1911,14 @@ class TennisDatabase:
         conditions = []
         params = []
         if tourney_name:
-            conditions.append("tourney_name = ?")
-            params.append(tourney_name)
+            variants = {tourney_name}
+            for prefix in ("ATP ", "WTA "):
+                variants.add(prefix + tourney_name)
+                if tourney_name.startswith(prefix):
+                    variants.add(tourney_name[len(prefix):])
+            ph = ", ".join("?" for _ in variants)
+            conditions.append(f"tourney_name IN ({ph})")
+            params.extend(sorted(variants))
         if year:
             conditions.append("tourney_date BETWEEN ? AND ?")
             params.extend([f"{year}0000", f"{year}9999"])
@@ -1885,7 +1946,24 @@ class TennisDatabase:
                 END,
                 match_num DESC
         """, params)
-        return [dict(r) for r in cur.fetchall()]
+        results = []
+        seen = set()
+        for r in cur.fetchall():
+            d = dict(r)
+            key = (_player_match_key(d.get("winner1_name") or ""),
+                   _player_match_key(d.get("winner2_name") or ""),
+                   _player_match_key(d.get("loser1_name") or ""),
+                   _player_match_key(d.get("loser2_name") or ""),
+                   d.get("round") or "", (d.get("score") or "").strip())
+            if key not in seen:
+                seen.add(key)
+                results.append(d)
+        return results
+
+    @staticmethod
+    def _normalize_tourney_name(name: str) -> str:
+        """Strip leading 'ATP ' / 'WTA ' unless it is a known proper name."""
+        return _normalize_tourney_name(name)
 
     def get_tournament_list(self, year=None, tour=None):
         """Get list of unique tournaments."""
@@ -1907,7 +1985,18 @@ class TennisDatabase:
               AND (is_upcoming = 0 OR is_upcoming IS NULL)
             ORDER BY tourney_date
         """, params)
-        return [dict(r) for r in cur.fetchall()]
+        seen = set()
+        result = []
+        for r in cur.fetchall():
+            d = dict(r)
+            norm = TennisDatabase._normalize_tourney_name(d["tourney_name"] or "")
+            if norm:
+                d["tourney_name"] = norm
+            key = (d["tourney_name"].lower(), d.get("tourney_date", "")[:4])
+            if key not in seen:
+                seen.add(key)
+                result.append(d)
+        return result
 
     def get_doubles_tournament_list(self, year=None, tour=None):
         """Get list of unique doubles tournaments."""
@@ -1928,7 +2017,18 @@ class TennisDatabase:
             WHERE {where}
             ORDER BY tourney_date
         """, params)
-        return [dict(r) for r in cur.fetchall()]
+        seen = set()
+        result = []
+        for r in cur.fetchall():
+            d = dict(r)
+            norm = TennisDatabase._normalize_tourney_name(d["tourney_name"] or "")
+            if norm:
+                d["tourney_name"] = norm
+            key = (d["tourney_name"].lower(), d.get("tourney_date", "")[:4])
+            if key not in seen:
+                seen.add(key)
+                result.append(d)
+        return result
 
     def get_available_years(self, tour=None):
         """Get list of years with data."""
@@ -2770,14 +2870,20 @@ class TennisDatabase:
         # SofaScore never replaces an existing TennisAbstract row.
         # Unique staging name (UUID) so concurrent imports cannot collide.
         staging_name = f"_import_staging_{uuid.uuid4().hex[:12]}"
+        m_tourney_key = _tourney_name_sql_key("m.tourney_name")
+        s_tourney_key = _tourney_name_sql_key("s.tourney_name")
         match_key = """
                      COALESCE(m.tour, '') = COALESCE(s.tour, '')
                  AND SUBSTR(m.tourney_date, 1, 4) = SUBSTR(s.tourney_date, 1, 4)
                  AND m.winner_name = s.winner_name
                  AND m.loser_name = s.loser_name
-                 AND LOWER(m.tourney_name) = LOWER(s.tourney_name)
+                 AND {m_tourney_key} = {s_tourney_key}
                  AND m.round = s.round
         """
+        match_key = match_key.format(
+            m_tourney_key=m_tourney_key,
+            s_tourney_key=s_tourney_key,
+        )
         m_provider = (
             "CASE WHEN m.scrape_provider IS NOT NULL AND m.scrape_provider != '' "
             "THEN m.scrape_provider "
@@ -2789,6 +2895,11 @@ class TennisDatabase:
         )
         try:
             matches_df.to_sql(staging_name, self.conn, if_exists="replace", index=False)
+            ref_sf_tourney_key = _tourney_name_sql_key("ref.tourney_name")
+            sf_tourney_key = _tourney_name_sql_key("sf.tourney_name")
+            canonical_tourney_key = _tourney_name_sql_key("canonical.tourney_name")
+            other_tourney_key = _tourney_name_sql_key("other.tourney_name")
+            ta_tourney_key = _tourney_name_sql_key("ta.tourney_name")
             self.conn.execute(f"""
                 UPDATE {staging_name} AS sf
                 SET surface = (
@@ -2798,7 +2909,7 @@ class TennisDatabase:
                       AND ref.scrape_provider = 'tennisabstract'
                       AND ref.tour = sf.tour
                       AND SUBSTR(ref.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
-                      AND ref.tourney_name = sf.tourney_name
+                      AND {ref_sf_tourney_key} = {sf_tourney_key}
                       AND COALESCE(ref.surface, '') != ''
                 )
                 WHERE sf.scrape_provider = 'sofascore'
@@ -2809,7 +2920,7 @@ class TennisDatabase:
                       AND ref.scrape_provider = 'tennisabstract'
                       AND ref.tour = sf.tour
                       AND SUBSTR(ref.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
-                      AND ref.tourney_name = sf.tourney_name
+                      AND {ref_sf_tourney_key} = {sf_tourney_key}
                       AND COALESCE(ref.surface, '') != ''
                   ) = 1
             """)
@@ -2821,7 +2932,7 @@ class TennisDatabase:
                     WHERE ref.tourney_id = 'SCRAPED'
                       AND ref.scrape_provider = 'tennisabstract'
                       AND ref.tour = sf.tour
-                      AND ref.tourney_name = sf.tourney_name
+                      AND {ref_sf_tourney_key} = {sf_tourney_key}
                       AND COALESCE(ref.surface, '') != ''
                 )
                 WHERE sf.scrape_provider = 'sofascore'
@@ -2831,7 +2942,7 @@ class TennisDatabase:
                     WHERE ref.tourney_id = 'SCRAPED'
                       AND ref.scrape_provider = 'tennisabstract'
                       AND ref.tour = sf.tour
-                      AND ref.tourney_name = sf.tourney_name
+                      AND {ref_sf_tourney_key} = {sf_tourney_key}
                       AND COALESCE(ref.surface, '') != ''
                   ) = 1
             """)
@@ -2847,7 +2958,7 @@ class TennisDatabase:
                      AND other.round NOT IN ('Q1', 'Q2')
                      AND COALESCE(canonical.tour, '') = COALESCE(other.tour, '')
                      AND SUBSTR(canonical.tourney_date, 1, 4) = SUBSTR(other.tourney_date, 1, 4)
-                     AND canonical.tourney_name = other.tourney_name
+                     AND {canonical_tourney_key} = {other_tourney_key}
                      AND canonical.winner_name = other.winner_name
                      AND canonical.loser_name = other.loser_name
                      AND (
@@ -2870,7 +2981,7 @@ class TennisDatabase:
                      AND other.round NOT IN ('Q1', 'Q2')
                      AND COALESCE(canonical.tour, '') = COALESCE(other.tour, '')
                      AND SUBSTR(canonical.tourney_date, 1, 4) = SUBSTR(other.tourney_date, 1, 4)
-                     AND canonical.tourney_name = other.tourney_name
+                     AND {canonical_tourney_key} = {other_tourney_key}
                      AND canonical.winner_name = other.winner_name
                      AND canonical.loser_name = other.loser_name
                      AND (
@@ -2907,11 +3018,11 @@ class TennisDatabase:
                             CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
                             - CAST(ta.tourney_date AS INTEGER)
                          ) <= 3
-                        WHERE ta.tourney_name = sf.tourney_name
+                        WHERE {ta_tourney_key} = {sf_tourney_key}
                            OR ta.tourney_level != sf.tourney_level
                     )
                 """)
-                self.conn.execute("""
+                self.conn.execute(f"""
                     DELETE FROM matches
                     WHERE rowid IN (
                         SELECT sf.rowid
@@ -2938,7 +3049,7 @@ class TennisDatabase:
                             CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
                             - CAST(ta.tourney_date AS INTEGER)
                          ) <= 3
-                        WHERE ta.tourney_name = sf.tourney_name
+                        WHERE {ta_tourney_key} = {sf_tourney_key}
                            OR ta.tourney_level != sf.tourney_level
                     )
                 """)
@@ -2956,14 +3067,14 @@ class TennisDatabase:
                          AND m.winner_name = s.winner_name
                          AND m.loser_name = s.loser_name
                          AND m.round = s.round
-                         AND m.tourney_name != s.tourney_name
+                         AND {m_tourney_key} = {s_tourney_key}
                          AND ABS(
                             CAST(COALESCE(NULLIF(s.source_match_date, ''), s.tourney_date) AS INTEGER)
                             - CAST(m.tourney_date AS INTEGER)
                          ) <= 7
                     )
                 """)
-                self.conn.execute("""
+                self.conn.execute(f"""
                     DELETE FROM matches
                     WHERE rowid IN (
                         SELECT sf.rowid
@@ -2978,7 +3089,7 @@ class TennisDatabase:
                          AND ta.winner_name = sf.winner_name
                          AND ta.loser_name = sf.loser_name
                          AND ta.round = sf.round
-                         AND ta.tourney_name != sf.tourney_name
+                         AND {ta_tourney_key} = {sf_tourney_key}
                          AND ABS(
                             CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
                             - CAST(ta.tourney_date AS INTEGER)
@@ -3831,7 +3942,9 @@ class TennisDatabase:
             return  # remote cleanup is run explicitly to avoid startup cost
 
         before = cur.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
-        cur.execute("""
+        ss_tourney_key = _tourney_name_sql_key("ss.tourney_name")
+        ta_tourney_key = _tourney_name_sql_key("ta.tourney_name")
+        cur.execute(f"""
             DELETE FROM matches
             WHERE rowid IN (
                 SELECT ss.rowid
@@ -3844,7 +3957,7 @@ class TennisDatabase:
                  AND SUBSTR(ss.tourney_date, 1, 4) = SUBSTR(ta.tourney_date, 1, 4)
                  AND ss.winner_name = ta.winner_name
                  AND ss.loser_name = ta.loser_name
-                 AND LOWER(ss.tourney_name) = LOWER(ta.tourney_name)
+                 AND {ss_tourney_key} = {ta_tourney_key}
                  AND ss.round = ta.round
                 WHERE LOWER(COALESCE(NULLIF(ss.scrape_provider, ''),
                       CASE WHEN ss.winner_seed IS NULL THEN 'sofascore'
@@ -4017,6 +4130,20 @@ class TennisDatabase:
         if _is_remote_conn(self.conn):
             return
 
+        trimmed_name = "TRIM(COALESCE(tourney_name, ''))"
+        rest_name = f"TRIM(SUBSTR({trimmed_name}, 5))"
+        protected = " OR ".join(
+            f"LOWER({rest_name}) LIKE '{suffix}%'"
+            for suffix in _PROTECTED_TOURNEY_SUFFIXES
+        )
+        cur.execute(f"""
+            UPDATE matches
+            SET tourney_name = {rest_name}
+            WHERE tourney_id = 'SCRAPED'
+              AND UPPER(SUBSTR({trimmed_name}, 1, 4)) IN ('ATP ', 'WTA ')
+              AND NOT ({protected})
+        """)
+
         for pattern, city, atp_name, wta_name in _MASTERS_ALIAS_RULES:
             labels = {atp_name.lower(), wta_name.lower(), city.lower()}
             if pattern == "italian open":
@@ -4066,7 +4193,9 @@ class TennisDatabase:
               AND tourney_name LIKE 'M' || tourney_level || ' %'
         """)
 
-        cur.execute("""
+        canonical_tourney_key = _tourney_name_sql_key("canonical.tourney_name")
+        other_tourney_key = _tourney_name_sql_key("other.tourney_name")
+        cur.execute(f"""
             DELETE FROM matches
             WHERE rowid IN (
                 SELECT other.rowid
@@ -4079,7 +4208,7 @@ class TennisDatabase:
                  AND other.round NOT IN ('Q1', 'Q2')
                  AND canonical.tour = other.tour
                  AND SUBSTR(canonical.tourney_date, 1, 4) = SUBSTR(other.tourney_date, 1, 4)
-                 AND canonical.tourney_name = other.tourney_name
+                 AND {canonical_tourney_key} = {other_tourney_key}
                  AND canonical.winner_name = other.winner_name
                  AND canonical.loser_name = other.loser_name
                  AND COALESCE(canonical.score, '') = COALESCE(other.score, '')
@@ -4116,7 +4245,9 @@ class TennisDatabase:
               AND LOWER(COALESCE(round, '')) LIKE '%qual%'
         """)
 
-        cur.execute("""
+        kept_tourney_key = _tourney_name_sql_key("kept.tourney_name")
+        later_tourney_key = _tourney_name_sql_key("later.tourney_name")
+        cur.execute(f"""
             DELETE FROM matches
             WHERE rowid IN (
                 SELECT later.rowid
@@ -4128,7 +4259,7 @@ class TennisDatabase:
                  AND later.tourney_id = 'SCRAPED'
                  AND kept.tour = later.tour
                  AND SUBSTR(kept.tourney_date, 1, 4) = SUBSTR(later.tourney_date, 1, 4)
-                 AND kept.tourney_name = later.tourney_name
+                 AND {kept_tourney_key} = {later_tourney_key}
                  AND kept.round = later.round
                  AND kept.winner_name = later.winner_name
                  AND kept.loser_name = later.loser_name

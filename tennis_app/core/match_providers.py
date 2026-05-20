@@ -190,6 +190,13 @@ class SofaScoreMatchProvider(MatchProvider):
         "united cup", "delray beach",
     }
 
+    # Tourney-name suffixes that should keep their ATP/WTA prefix
+    # (matched with .startswith against the stripped lowercased rest)
+    _PROPER_ATP_WTA_SUFFIXES = [
+        "cup", "tour championships", "championships",
+        "finals", "challenger",
+    ]
+
     def __init__(self, timeout: int = 20, base_url: str | None = None):
         self.timeout = timeout
         self.base_url = (base_url or os.getenv(SOFASCORE_API_BASE_ENV)
@@ -770,6 +777,15 @@ class SofaScoreMatchProvider(MatchProvider):
     def _canonical_tourney_name(self, name: str, event: dict[str, Any],
                                 tour: str = "atp",
                                 event_year: str | None = None) -> str:
+        # Strip leading "ATP "/"WTA " from city-name tournaments
+        # (preserve proper names like "ATP Cup", "WTA Finals")
+        for prefix in ("ATP ", "WTA "):
+            if name.startswith(prefix):
+                rest = name[len(prefix):]
+                if not any(self._norm(rest).startswith(p)
+                           for p in self._PROPER_ATP_WTA_SUFFIXES):
+                    name = rest
+                    break
         label = self._tournament_label(event)
         if self._label_has(label, "united cup"):
             return "United Cup"
