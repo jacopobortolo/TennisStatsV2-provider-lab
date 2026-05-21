@@ -1250,6 +1250,7 @@ class TennisDatabase:
                        w_bpFaced as bp_faced
                 FROM matches WHERE {win_match}{tour_cond}
                   AND (is_upcoming = 0 OR is_upcoming IS NULL)
+                                    AND UPPER(COALESCE(score,'')) NOT LIKE '%W/O%'
                 UNION ALL
                 SELECT 'L' as side, surface, tourney_level, round, tourney_date,
                        l_ace as aces, l_df as dfs, l_svpt as svpt,
@@ -1258,6 +1259,7 @@ class TennisDatabase:
                        l_bpFaced as bp_faced
                 FROM matches WHERE {lose_match}{tour_cond}
                   AND (is_upcoming = 0 OR is_upcoming IS NULL)
+                                    AND UPPER(COALESCE(score,'')) NOT LIKE '%W/O%'
             )
             GROUP BY side, surface, tourney_level, round, yr
         """, win_params + tour_params + lose_params + tour_params).fetchall()
@@ -1312,7 +1314,6 @@ class TennisDatabase:
                 levels.setdefault(lev_name, {"wins": 0, "losses": 0})
                 levels[lev_name]["wins" if side == "W" else "losses"] += cnt
 
-                # Per-level round breakdown
                 lr = level_rounds.setdefault(lev_name, {
                     "F_w": 0, "F_l": 0, "SF": 0, "QF": 0,
                     "R16": 0, "R32": 0, "R64": 0,
@@ -1559,6 +1560,7 @@ class TennisDatabase:
             WHERE ((winner_id = ? AND loser_id = ?)
                OR (winner_id = ? AND loser_id = ?)){tour_cond}
               AND (is_upcoming = 0 OR is_upcoming IS NULL)
+                            AND UPPER(COALESCE(score,'')) NOT LIKE '%W/O%'
             ORDER BY tourney_date DESC
         """, (player1_id, player2_id, player2_id, player1_id) + tour_params).fetchall()
 

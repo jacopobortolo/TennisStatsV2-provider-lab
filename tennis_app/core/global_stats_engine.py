@@ -127,9 +127,14 @@ class GlobalStatsEngine:
         return min(values, key=lambda item: self._round_rank(item))
 
     def _where(self, filters, alias="m", include_level=True,
-               include_surface=True, include_round=True):
+               include_surface=True, include_round=True,
+               exclude_walkovers=True):
         conditions = [f"({alias}.is_upcoming = 0 OR {alias}.is_upcoming IS NULL)"]
         params = []
+        if exclude_walkovers:
+            conditions.append(
+                f"UPPER(COALESCE({alias}.score, '')) NOT LIKE '%W/O%'"
+            )
         tour_values = [tour.lower() for tour in self._filter_values(filters.get("tour"))]
         self._add_in_filter(conditions, params, f"{alias}.tour", tour_values)
         if include_surface:
@@ -285,9 +290,11 @@ class GlobalStatsEngine:
         local_filters = dict(filters)
         if forced_level:
             local_filters["level"] = forced_level
-        where, params = self._where(local_filters, include_round=include_round)
-        if exclude_walkovers:
-            where = f"{where} AND UPPER(COALESCE(m.score, '')) NOT LIKE '%W/O%'"
+        where, params = self._where(
+            local_filters,
+            include_round=include_round,
+            exclude_walkovers=exclude_walkovers,
+        )
         return self._query(f"""
             SELECT tourney_id, tourney_name, tourney_date, tourney_level,
                    surface, match_num, round, winner_name, loser_name,
