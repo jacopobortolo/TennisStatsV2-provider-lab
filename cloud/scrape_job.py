@@ -192,7 +192,7 @@ def main(argv=None) -> int:
 
     effective_max_workers = args.max_workers
     if effective_max_workers is None:
-        effective_max_workers = 2 if uses_sofascore else 8
+        effective_max_workers = 3 if uses_sofascore else 8
     effective_max_workers = max(1, int(effective_max_workers))
     tours = ("atp", "wta") if args.tour == "both" else (args.tour,)
 
