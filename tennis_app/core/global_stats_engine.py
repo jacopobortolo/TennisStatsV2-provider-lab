@@ -280,11 +280,14 @@ class GlobalStatsEngine:
             str(row.get("tourney_date") or ""),
         ))
 
-    def _ordered_match_rows(self, filters, include_round=False, forced_level=None):
+    def _ordered_match_rows(self, filters, include_round=False, forced_level=None,
+                            exclude_walkovers=False):
         local_filters = dict(filters)
         if forced_level:
             local_filters["level"] = forced_level
         where, params = self._where(local_filters, include_round=include_round)
+        if exclude_walkovers:
+            where = f"{where} AND UPPER(COALESCE(m.score, '')) NOT LIKE '%W/O%'"
         return self._query(f"""
             SELECT tourney_id, tourney_name, tourney_date, tourney_level,
                    surface, match_num, round, winner_name, loser_name,
@@ -302,8 +305,12 @@ class GlobalStatsEngine:
                          WHEN 'F' THEN 10 ELSE 11 END
         """, params)
 
-    def _event_results(self, filters, forced_level=None):
-        rows = self._ordered_match_rows(filters, forced_level=forced_level)
+    def _event_results(self, filters, forced_level=None, exclude_walkovers=False):
+        rows = self._ordered_match_rows(
+            filters,
+            forced_level=forced_level,
+            exclude_walkovers=exclude_walkovers,
+        )
         events = {}
 
         def update_player(row, player_name, reached_round, entry, ioc):
@@ -390,13 +397,15 @@ class GlobalStatsEngine:
                        COALESCE(l_bpFaced, 0) - COALESCE(l_bpSaved, 0) AS breaks_made,
                        COALESCE(w_bpFaced, 0) - COALESCE(w_bpSaved, 0) AS breaks_conceded
                 FROM matches m
-                WHERE {where} AND winner_name IS NOT NULL AND winner_name != ''
+                                WHERE {where} AND winner_name IS NOT NULL AND winner_name != ''
+                                    AND UPPER(COALESCE(score, '')) NOT LIKE '%W/O%'
                 UNION ALL
                 SELECT loser_name AS player, 0 AS won, tourney_date,
                        tourney_name, tourney_level, surface, round,
                        score, 0 AS breaks_made, 0 AS breaks_conceded
                 FROM matches m
-                WHERE {where} AND loser_name IS NOT NULL AND loser_name != ''
+                                WHERE {where} AND loser_name IS NOT NULL AND loser_name != ''
+                                    AND UPPER(COALESCE(score, '')) NOT LIKE '%W/O%'
             )
             SELECT player, won, tourney_date, tourney_name, tourney_level, surface, round,
                    score, breaks_made, breaks_conceded
@@ -1471,7 +1480,7 @@ class GlobalStatsEngine:
     # ------------------------------------------------------------------
 
     def _stat_title_streak_overall(self, filters, limit):
-        events = self._event_results(filters)
+        events = self._event_results(filters, exclude_walkovers=True)
         results = self._streak_from_boolean_events(
             events,
             label_func=lambda event: event["player"],
@@ -1480,7 +1489,7 @@ class GlobalStatsEngine:
         return sorted(results, key=lambda row: (-row[1], row[0]))[:limit]
 
     def _stat_title_streak_by_level(self, filters, limit):
-        events = self._event_results(filters)
+        events = self._event_results(filters, exclude_walkovers=True)
         results = self._streak_from_boolean_events(
             events,
             label_func=lambda event: (
@@ -1774,12 +1783,14 @@ class GlobalStatsEngine:
                 SELECT winner_name AS player, 1 AS won, tourney_date,
                        tourney_name, tourney_level, surface, round
                 FROM matches m
-                WHERE {where} AND winner_name IS NOT NULL AND winner_name != ''
+                                WHERE {where} AND winner_name IS NOT NULL AND winner_name != ''
+                                    AND UPPER(COALESCE(score, '')) NOT LIKE '%W/O%'
                 UNION ALL
                 SELECT loser_name AS player, 0 AS won, tourney_date,
                        tourney_name, tourney_level, surface, round
                 FROM matches m
-                WHERE {where} AND loser_name IS NOT NULL AND loser_name != ''
+                                WHERE {where} AND loser_name IS NOT NULL AND loser_name != ''
+                                    AND UPPER(COALESCE(score, '')) NOT LIKE '%W/O%'
             )
             SELECT player, won, tourney_date, tourney_name
             FROM player_matches
@@ -1976,7 +1987,13 @@ class GlobalStatsEngine:
                            group_attr=None, group_value=None):
         """Return the individual wins forming a win streak, ordered chronologically."""
         where, params = self._where(filters)
-        conditions = [where, "winner_name = ?", "tourney_date >= ?", "tourney_date <= ?"]
+        conditions = [
+            where,
+            "winner_name = ?",
+            "tourney_date >= ?",
+            "tourney_date <= ?",
+            "UPPER(COALESCE(score, '')) NOT LIKE '%W/O%'",
+        ]
         bind = params + [player, start_date, end_date]
         if group_attr == "level" and group_value:
             level_key = next(
@@ -2120,7 +2137,11 @@ class GlobalStatsEngine:
         else:
             threshold = self._round_threshold(filters.get("round"), default_round)
         threshold_rank = self._round_rank(threshold)
-        events = self._event_results(filters, forced_level=forced_level)
+        events = self._event_results(
+            filters,
+            forced_level=forced_level,
+            exclude_walkovers=True,
+        )
         results = self._streak_from_boolean_events(
             events,
             label_func=lambda event: event["player"],
@@ -2169,6 +2190,7 @@ class GlobalStatsEngine:
                    CAST(SUBSTR(tourney_date,1,4) AS INTEGER) AS season
             FROM matches m
             WHERE {where} AND round='F' AND winner_name != ''
+              AND UPPER(COALESCE(score, '')) NOT LIKE '%W/O%'
             GROUP BY winner_name, tourney_name, season
             ORDER BY winner_name, tourney_name, season
         """, params)
