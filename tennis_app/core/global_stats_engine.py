@@ -613,6 +613,24 @@ class GlobalStatsEngine:
         """, params + params + [limit])
         return [(r["player"], r["value"], "QF/SF event appearances") for r in rows]
 
+    def _stat_most_semifinals_overall(self, filters, limit):
+        where, params = self._where(filters, include_round=False)
+        rows = self._query(f"""
+            WITH appearances AS (
+                SELECT winner_name AS player, tourney_id, tourney_name, tourney_date FROM matches m
+                WHERE {where} AND round = 'SF' AND winner_name != ''
+                UNION
+                SELECT loser_name AS player, tourney_id, tourney_name, tourney_date FROM matches m
+                WHERE {where} AND round = 'SF' AND loser_name != ''
+            )
+            SELECT player, COUNT(*) AS value
+            FROM appearances
+            GROUP BY player
+            ORDER BY value DESC, player ASC
+            LIMIT ?
+        """, params + params + [limit])
+        return [(r["player"], r["value"], "SF appearances") for r in rows]
+
     def _stat_slam_boxset(self, filters, limit):
         """Career Grand Slam boxset: completions count & age at first completion.
 

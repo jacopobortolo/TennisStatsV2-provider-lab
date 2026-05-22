@@ -23,7 +23,7 @@ from .scraper import (
     clean_player_name,
 )
 from .match_providers import MATCH_PROVIDER_ENV, get_match_provider
-from .match_providers import SofaScoreAccessBlocked
+from .match_providers import SofaScoreAccessBlocked, SofaScoreMatchProvider
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +429,43 @@ def _normalize_name(name):
     name = "".join(c for c in name if not unicodedata.combining(c))
     name = name.replace("-", " ")
     return re.sub(r"\s+", " ", name).strip().lower()
+
+
+def _existing_match_keys_by_player(db, player_names, tour):
+    """Return existing completed match keys for the supplied players."""
+    if db is None or not player_names:
+        return {}
+    ordered_names = []
+    seen = set()
+    for name in player_names:
+        text = str(name or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        ordered_names.append(text)
+    if not ordered_names:
+        return {}
+    placeholders = ",".join("?" for _ in ordered_names)
+    rows = db.conn.execute(
+        f"""
+        SELECT winner_name, loser_name, tour, tourney_date, tourney_name, round
+        FROM matches
+        WHERE tour = ?
+          AND (is_upcoming = 0 OR is_upcoming IS NULL)
+          AND (winner_name IN ({placeholders}) OR loser_name IN ({placeholders}))
+        """,
+        [tour, *ordered_names, *ordered_names],
+    ).fetchall()
+    keys_by_player = {name: set() for name in ordered_names}
+    for winner_name, loser_name, row_tour, tourney_date, tourney_name, round_name in rows:
+        match_key = SofaScoreMatchProvider.match_key(
+            row_tour, tourney_date, winner_name, loser_name, tourney_name, round_name
+        )
+        if winner_name in keys_by_player:
+            keys_by_player[winner_name].add(match_key)
+        if loser_name in keys_by_player:
+            keys_by_player[loser_name].add(match_key)
+    return keys_by_player
 
 
 def _strip_draw_size(token):
@@ -1078,14 +1115,27 @@ def scrape_top_players_matches(top_n=50, tour="atp", progress_callback=None,
     # the worker count modest to avoid hammering tennisabstract.com.
     total_to_scrape = len(actual_targets)
     worker_count = min(max(1, max_workers), max(1, total_to_scrape))
+    existing_keys_by_player = {}
+    use_existing_match_shortcut = (
+        db is not None and selected_match_provider == "sofascore")
+    if use_existing_match_shortcut:
+        existing_keys_by_player = _existing_match_keys_by_player(
+            db, [entry["name"] for _, entry in actual_targets], tour)
 
     def _fetch_one(entry):
         name = entry["name"]
         try:
+            existing_match_keys = None
+            skip_existing_matches = False
+            if use_existing_match_shortcut:
+                existing_match_keys = existing_keys_by_player.get(name) or set()
+                skip_existing_matches = bool(existing_match_keys)
             df, last_match_date, match_signature = scrape_player_matches(
                 name, min_year=min_year, tour=tour,
                 max_matches=max_matches_per_player,
-                match_provider=match_provider)
+                match_provider=match_provider,
+                existing_match_keys=existing_match_keys,
+                skip_existing_matches=skip_existing_matches)
             if selected_match_provider in {"sofascore", "hybrid"}:
                 df = _fill_current_ranks(df, current_rank_lookup)
                 match_signature = _build_match_signature(df)

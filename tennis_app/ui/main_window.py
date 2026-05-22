@@ -61,6 +61,7 @@ NAV_ITEMS = [
     ("🎾  Matches",      "matches"),
     ("⚔️  H2H",          "h2h"),
     ("🏆  Tournaments",  "tournaments"),
+    ("📋  Torunaments Stats", "tournament_stats"),
     ("📈  Stats",        "stats"),
     ("🌐  Global",       "global_stats"),
     ("🌍  Nations",      "nations"),
@@ -232,6 +233,7 @@ class MainWindow(QMainWindow):
         from .pages.matches_page import MatchesPage
         from .pages.h2h_page import H2HPage
         from .pages.tournaments_page import TournamentsPage
+        from .pages.tournament_stats_page import TournamentStatsPage
         from .pages.stats_page import StatsPage
         from .pages.insights_page import InsightsPage
         from .pages.global_stats_page import GlobalStatsPage
@@ -242,6 +244,7 @@ class MainWindow(QMainWindow):
             "matches": MatchesPage,
             "h2h": H2HPage,
             "tournaments": TournamentsPage,
+            "tournament_stats": TournamentStatsPage,
             "stats": StatsPage,
             "global_stats": GlobalStatsPage,
             "nations": InsightsPage,
