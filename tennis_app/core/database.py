@@ -100,6 +100,19 @@ _PROTECTED_TOURNEY_SUFFIXES = [
     "finals", "challenger",
 ]
 
+# Hard tournament name aliases (lowercase normalized key → canonical name).
+_TOURNEY_NAME_ALIASES = {
+    "australian chps.": "Australian Open",
+    "australian open-2": "Australian Open",
+    "doha aus open qualies": "Australian Open",
+    "french open": "Roland Garros",
+    "us open": "US Open",
+}
+# Reverse lookup: canonical name → set of old names still possibly in the DB.
+_TOURNEY_NAME_REVERSE: dict[str, set[str]] = {}
+for _old, _new in _TOURNEY_NAME_ALIASES.items():
+    _TOURNEY_NAME_REVERSE.setdefault(_new, set()).add(_old)
+
 
 def _normalize_tourney_name(name):
     """Strip leading 'ATP ' / 'WTA ' unless it is a known proper name."""
@@ -112,8 +125,8 @@ def _normalize_tourney_name(name):
             rest = value[len(prefix):].strip()
             if not any(rest.lower().startswith(p)
                        for p in _PROTECTED_TOURNEY_SUFFIXES):
-                return rest
-    return value
+                return _TOURNEY_NAME_ALIASES.get(rest.lower(), rest)
+    return _TOURNEY_NAME_ALIASES.get(value.lower(), value)
 
 
 def _tourney_name_sql_key(expr):
@@ -1052,17 +1065,31 @@ class TennisDatabase:
         """Search players by name (partial match), best matches first."""
         cur = self.conn.execute("""
             SELECT player_id, name_first, name_last, hand, dob, ioc, height, tour,
-                   CASE
-                     WHEN LOWER(name_first || ' ' || name_last) = LOWER(?) THEN 0
-                     WHEN LOWER(name_last) = LOWER(?) THEN 1
-                     WHEN LOWER(name_first) = LOWER(?) THEN 2
-                     ELSE 3
-                   END AS rank_score
-            FROM players
-            WHERE name_first || ' ' || name_last LIKE ?
+                   rank_score
+            FROM (
+                SELECT player_id, name_first, name_last, hand, dob, ioc, height, tour,
+                       CASE
+                         WHEN LOWER(name_first || ' ' || name_last) = LOWER(?) THEN 0
+                         WHEN LOWER(name_last) = LOWER(?) THEN 1
+                         WHEN LOWER(name_first) = LOWER(?) THEN 2
+                         ELSE 3
+                       END AS rank_score,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY LOWER(name_first || ' ' || name_last)
+                           ORDER BY CASE
+                             WHEN LOWER(name_first || ' ' || name_last) = LOWER(?) THEN 0
+                             WHEN LOWER(name_last) = LOWER(?) THEN 1
+                             WHEN LOWER(name_first) = LOWER(?) THEN 2
+                             ELSE 3
+                           END, name_last, name_first
+                       ) AS rn
+                FROM players
+                WHERE name_first || ' ' || name_last LIKE ?
+            )
+            WHERE rn = 1
             ORDER BY rank_score, name_last, name_first
             LIMIT ?
-        """, (query, query, query, f"%{query}%", limit))
+        """, (query, query, query, query, query, query, f"%{query}%", limit))
         return [dict(r) for r in cur.fetchall()]
 
     def get_player(self, player_id, tour=None):
@@ -1858,14 +1885,15 @@ class TennisDatabase:
         conditions = []
         params = []
         if tourney_name:
-            variants = {tourney_name}
-            for prefix in ("ATP ", "WTA "):
-                variants.add(prefix + tourney_name)
-                if tourney_name.startswith(prefix):
-                    variants.add(tourney_name[len(prefix):])
-            ph = ", ".join("?" for _ in variants)
-            conditions.append(f"tourney_name IN ({ph})")
-            params.extend(sorted(variants))
+            norm_name = _normalize_tourney_name(tourney_name)
+            lookup_names = {norm_name}
+            # Also search for old aliases still present in DB rows.
+            for old in _TOURNEY_NAME_REVERSE.get(norm_name, set()):
+                lookup_names.add(old)
+            ph = ", ".join("?" for _ in lookup_names)
+            conditions.append(
+                f"{_tourney_name_sql_key('tourney_name')} IN ({ph})")
+            params.extend(name.lower() for name in lookup_names)
         if year:
             conditions.append("tourney_date BETWEEN ? AND ?")
             params.extend([f"{year}0000", f"{year}9999"])
@@ -1913,14 +1941,14 @@ class TennisDatabase:
         conditions = []
         params = []
         if tourney_name:
-            variants = {tourney_name}
-            for prefix in ("ATP ", "WTA "):
-                variants.add(prefix + tourney_name)
-                if tourney_name.startswith(prefix):
-                    variants.add(tourney_name[len(prefix):])
-            ph = ", ".join("?" for _ in variants)
-            conditions.append(f"tourney_name IN ({ph})")
-            params.extend(sorted(variants))
+            norm_name = _normalize_tourney_name(tourney_name)
+            lookup_names = {norm_name}
+            for old in _TOURNEY_NAME_REVERSE.get(norm_name, set()):
+                lookup_names.add(old)
+            ph = ", ".join("?" for _ in lookup_names)
+            conditions.append(
+                f"{_tourney_name_sql_key('tourney_name')} IN ({ph})")
+            params.extend(name.lower() for name in lookup_names)
         if year:
             conditions.append("tourney_date BETWEEN ? AND ?")
             params.extend([f"{year}0000", f"{year}9999"])
@@ -1980,23 +2008,22 @@ class TennisDatabase:
         where = " AND ".join(conditions) if conditions else "1=1"
 
         cur = self.conn.execute(f"""
-            SELECT DISTINCT tourney_name, tourney_id, surface, tourney_level,
-                   tourney_date
+            SELECT {_tourney_name_sql_key('tourney_name')} AS norm_name,
+                   MIN(tourney_name) AS tourney_name,
+                   MIN(tourney_id) AS tourney_id,
+                   MIN(surface) AS surface,
+                   MIN(tourney_level) AS tourney_level,
+                   MIN(tourney_date) AS tourney_date
             FROM matches
             WHERE {where}
               AND (is_upcoming = 0 OR is_upcoming IS NULL)
-            ORDER BY tourney_date
+            GROUP BY norm_name, SUBSTR(tourney_date, 1, 4)
+            ORDER BY MIN(tourney_date)
         """, params)
-        seen = set()
         result = []
         for r in cur.fetchall():
             d = dict(r)
-            norm = TennisDatabase._normalize_tourney_name(d["tourney_name"] or "")
-            if norm:
-                d["tourney_name"] = norm
-            key = (d["tourney_name"].lower(), d.get("tourney_date", "")[:4])
-            if key not in seen:
-                seen.add(key)
+            if d["tourney_name"]:
                 result.append(d)
         return result
 
@@ -2013,22 +2040,21 @@ class TennisDatabase:
         where = " AND ".join(conditions) if conditions else "1=1"
 
         cur = self.conn.execute(f"""
-            SELECT DISTINCT tourney_name, tourney_id, surface, tourney_level,
-                   tourney_date
+            SELECT {_tourney_name_sql_key('tourney_name')} AS norm_name,
+                   MIN(tourney_name) AS tourney_name,
+                   MIN(tourney_id) AS tourney_id,
+                   MIN(surface) AS surface,
+                   MIN(tourney_level) AS tourney_level,
+                   MIN(tourney_date) AS tourney_date
             FROM doubles_matches
             WHERE {where}
-            ORDER BY tourney_date
+            GROUP BY norm_name, SUBSTR(tourney_date, 1, 4)
+            ORDER BY MIN(tourney_date)
         """, params)
-        seen = set()
         result = []
         for r in cur.fetchall():
             d = dict(r)
-            norm = TennisDatabase._normalize_tourney_name(d["tourney_name"] or "")
-            if norm:
-                d["tourney_name"] = norm
-            key = (d["tourney_name"].lower(), d.get("tourney_date", "")[:4])
-            if key not in seen:
-                seen.add(key)
+            if d["tourney_name"]:
                 result.append(d)
         return result
 
@@ -4267,6 +4293,14 @@ class TennisDatabase:
                  AND kept.loser_name = later.loser_name
             )
         """)
+
+        # Hard tournament name aliases — apply to all rows.
+        for old_lower, canonical in _TOURNEY_NAME_ALIASES.items():
+            cur.execute(
+                "UPDATE matches SET tourney_name = ? "
+                "WHERE LOWER(tourney_name) = ?",
+                (canonical, old_lower))
+
         self.conn.commit()
 
     def get_extended_stats_count(self, player_name):

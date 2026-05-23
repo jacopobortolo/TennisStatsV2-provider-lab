@@ -189,6 +189,13 @@ class GlobalStatsEngine:
         if include_round:
             round_values = self._filter_values(filters.get("round"))
             self._add_in_filter(conditions, params, f"{alias}.round", round_values)
+        tournament_values = self._filter_values(filters.get("tournament"))
+        if tournament_values:
+            clauses = []
+            for tname in tournament_values:
+                clauses.append(f"LOWER({alias}.tourney_name) = LOWER(?)")
+                params.append(str(tname))
+            conditions.append("(" + " OR ".join(clauses) + ")")
         return " AND ".join(conditions), params
 
     def _player_match_cte(self, filters, extra_where=""):

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from ..theme import COLORS
 from ..widgets import DataTable, PillButtonGroup, ScrollablePage, Separator
-from ...core.global_stats_engine import GlobalStatsEngine
+from ...core.global_stats_engine import GlobalStatsEngine, LEVEL_FILTERS
 
 
 TABLE_SPECS = [
@@ -72,6 +72,13 @@ LEVEL_OPTIONS = [
     "DC/BJKC",
     "Challenger",
 ]
+
+
+def _level_db_codes(level_label):
+    """Return the list of DB tourney_level codes for a UI level label."""
+    if not level_label or level_label == "All":
+        return []
+    return LEVEL_FILTERS.get(level_label, [])
 
 
 class _TournamentStatsWorker(QThread):
@@ -164,14 +171,19 @@ class TournamentStatsPage(QWidget):
         filter_row.setSpacing(10)
 
         self.tour_pills = PillButtonGroup(["ATP", "WTA"])
-        self.tour_pills.changed.connect(lambda _: self._refresh())
+        self.tour_pills.changed.connect(self._on_filters_changed)
         filter_row.addWidget(self.tour_pills)
 
         filter_row.addWidget(QLabel("Level:"))
-        self.level_combo = QComboBox()
-        self.level_combo.addItems(LEVEL_OPTIONS)
-        self.level_combo.currentIndexChanged.connect(lambda _: self._refresh())
-        filter_row.addWidget(self.level_combo)
+        self.level_pills = PillButtonGroup(LEVEL_OPTIONS)
+        self.level_pills.changed.connect(self._on_filters_changed)
+        filter_row.addWidget(self.level_pills)
+
+        filter_row.addWidget(QLabel("Tournament:"))
+        self.tournament_combo = QComboBox()
+        self.tournament_combo.setMinimumWidth(180)
+        self.tournament_combo.currentIndexChanged.connect(self._on_tournament_combo_changed)
+        filter_row.addWidget(self.tournament_combo)
         filter_row.addStretch()
         layout.addLayout(filter_row)
 
@@ -197,10 +209,57 @@ class TournamentStatsPage(QWidget):
 
     def _current_filters(self):
         filters = {"tour": self.tour_pills.value().lower()}
-        level = self.level_combo.currentText()
+        level = self.level_pills.value()
         if level and level != "All":
             filters["level"] = level
+        tournament = self.tournament_combo.currentData()
+        if tournament:
+            filters["tournament"] = tournament
         return filters
+
+    def _on_filters_changed(self, _value=None):
+        self._rebuild_tournament_combo()
+        self._refresh()
+
+    def _on_tournament_combo_changed(self, _index):
+        self._refresh()
+
+    def _rebuild_tournament_combo(self):
+        tour = self.tour_pills.value().lower()
+        level_label = self.level_pills.value()
+        level_codes = _level_db_codes(level_label)
+        self.tournament_combo.blockSignals(True)
+        self.tournament_combo.clear()
+        self.tournament_combo.addItem("All", None)
+        if self.db and self.db.conn:
+            params = [tour]
+            if level_codes:
+                placeholders = ",".join("?" for _ in level_codes)
+                params.extend(level_codes)
+                sql = f"""
+                    SELECT DISTINCT tourney_name
+                    FROM matches
+                    WHERE tour = ?
+                      AND tourney_level IN ({placeholders})
+                      AND tourney_name != ''
+                    ORDER BY tourney_name
+                """
+            else:
+                sql = """
+                    SELECT DISTINCT tourney_name
+                    FROM matches
+                    WHERE tour = ?
+                      AND tourney_name != ''
+                    ORDER BY tourney_name
+                """
+            try:
+                rows = self.db.conn.execute(sql, params).fetchall()
+                for (name,) in rows:
+                    if name:
+                        self.tournament_combo.addItem(name, name)
+            except Exception:
+                pass
+        self.tournament_combo.blockSignals(False)
 
     def _refresh(self):
         self._request_id += 1
