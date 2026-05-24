@@ -106,6 +106,8 @@ _TOURNEY_NAME_ALIASES = {
     "australian open-2": "Australian Open",
     "doha aus open qualies": "Australian Open",
     "french open": "Roland Garros",
+    "parma 125 ch": "Parma 125",
+    "parma 125 challenger": "Parma 125",
     "us open": "US Open",
 }
 # Reverse lookup: canonical name → set of old names still possibly in the DB.
@@ -127,6 +129,30 @@ def _normalize_tourney_name(name):
                        for p in _PROTECTED_TOURNEY_SUFFIXES):
                 return _TOURNEY_NAME_ALIASES.get(rest.lower(), rest)
     return _TOURNEY_NAME_ALIASES.get(value.lower(), value)
+
+
+def _coerce_tourney_year(year):
+    if year in (None, ""):
+        return None
+    try:
+        text = str(year).strip()
+        if len(text) >= 4:
+            return int(text[:4])
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _contextual_scraped_tourney_alias(name, tour=None, year=None):
+    canonical = _normalize_tourney_name(name)
+    if not isinstance(canonical, str) or not canonical.strip():
+        return canonical
+    normalized = re.sub(r"\s+", " ", canonical.strip()).lower()
+    event_year = _coerce_tourney_year(year)
+    if str(tour or "").lower() == "wta" and event_year is not None:
+        if event_year >= 2023 and normalized == "parma":
+            return "Parma 125"
+    return canonical
 
 
 def _tourney_name_sql_key(expr):
@@ -178,7 +204,7 @@ def _canonical_atp_challenger_name(name):
     return value
 
 
-def _canonical_scraped_tourney_name(name, tour=None, level=None):
+def _canonical_scraped_tourney_name(name, tour=None, level=None, year=None):
     """Map common live-provider tournament labels to TennisAbstract names."""
     if not isinstance(name, str) or not name.strip():
         return name
@@ -195,7 +221,7 @@ def _canonical_scraped_tourney_name(name, tour=None, level=None):
                 city, atp_name, wta_name, tour=tour, level=level_text)
     if is_atp and level_text == "C":
         return _canonical_atp_challenger_name(name)
-    return _normalize_tourney_name(name)
+    return _contextual_scraped_tourney_alias(name, tour=tour, year=year)
 
 
 def _sofascore_round_from_ordinal(ordinal):
@@ -1177,7 +1203,15 @@ class TennisDatabase:
                 match_num DESC
         """
         cur = self.conn.execute(query, params)
-        return [dict(r) for r in cur.fetchall()]
+        matches = []
+        for row in cur.fetchall():
+            d = dict(row)
+            d["tourney_name"] = _canonical_scraped_tourney_name(
+                d.get("tourney_name"), d.get("tour"),
+                d.get("tourney_level"), d.get("tourney_date"),
+            )
+            matches.append(d)
+        return matches
 
     def get_player_upcoming_match(self, player_name):
         """Return the next scheduled match for *player_name*, or None.
@@ -2656,7 +2690,7 @@ class TennisDatabase:
             def _canon_row(row):
                 return _canonical_scraped_tourney_name(
                     row.get("tourney_name"), row.get("tour"),
-                    row.get("tourney_level"))
+                    row.get("tourney_level"), row.get("tourney_date"))
             matches_df["tourney_name"] = matches_df.apply(_canon_row, axis=1)
         if "round" in matches_df.columns:
             def _canon_round_row(row):
@@ -4300,6 +4334,15 @@ class TennisDatabase:
                 "UPDATE matches SET tourney_name = ? "
                 "WHERE LOWER(tourney_name) = ?",
                 (canonical, old_lower))
+
+        cur.execute("""
+            UPDATE matches
+            SET tourney_name = 'Parma 125'
+            WHERE tourney_id = 'SCRAPED'
+              AND tour = 'wta'
+              AND SUBSTR(COALESCE(tourney_date, ''), 1, 4) >= '2023'
+              AND LOWER(TRIM(COALESCE(tourney_name, ''))) = 'parma'
+        """)
 
         self.conn.commit()
 

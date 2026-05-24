@@ -89,6 +89,8 @@ class MatchesPage(QWidget):
         self._current_player_tour = None
         self._current_page = 1
         self._matches_worker = None
+        self._sort_column = None
+        self._sort_order = Qt.DescendingOrder
         self._filter_timer = QTimer(self)
         self._filter_timer.setSingleShot(True)
         self._filter_timer.setInterval(250)
@@ -192,6 +194,10 @@ class MatchesPage(QWidget):
             ("Loser", 160), ("W Rk", 50), ("L Rk", 50),
             ("Score", 210), ("Min", 45),
         ])
+        self.table.horizontalHeader().setSectionsClickable(True)
+        self.table.horizontalHeader().setSortIndicatorShown(False)
+        self.table.horizontalHeader().sectionClicked.connect(
+            self._on_header_clicked)
         self.table.doubleClicked.connect(self._on_match_double_clicked)
         layout.addWidget(self.table, 1)
 
@@ -368,19 +374,73 @@ class MatchesPage(QWidget):
                 pass
         return result
 
+    @staticmethod
+    def _match_minutes(match):
+        value = match.get("minutes")
+        if value in (None, ""):
+            return None
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
+    def _get_display_matches(self):
+        matches = list(self._get_filtered_matches())
+        if self._sort_column != 10:
+            return matches
+
+        if self._sort_order == Qt.DescendingOrder:
+            matches.sort(
+                key=lambda m: (
+                    self._match_minutes(m) is None,
+                    -(self._match_minutes(m) or 0),
+                )
+            )
+        else:
+            matches.sort(
+                key=lambda m: (
+                    self._match_minutes(m) is None,
+                    self._match_minutes(m) or 0,
+                )
+            )
+        return matches
+
+    def _update_sort_indicator(self):
+        header = self.table.horizontalHeader()
+        active = self._sort_column == 10
+        header.setSortIndicatorShown(active)
+        if active:
+            header.setSortIndicator(self._sort_column, self._sort_order)
+
+    def _on_header_clicked(self, column):
+        if column != 10:
+            return
+        if self._sort_column != column:
+            self._sort_column = column
+            self._sort_order = Qt.DescendingOrder
+        elif self._sort_order == Qt.DescendingOrder:
+            self._sort_order = Qt.AscendingOrder
+        else:
+            self._sort_column = None
+            self._sort_order = Qt.DescendingOrder
+        self._update_sort_indicator()
+        self._current_page = 1
+        self._display_page()
+
     def _rows_per_page(self):
         text = self.rows_combo.currentText()
         return None if text == "All" else int(text)
 
     def _total_pages(self):
         rpp = self._rows_per_page()
-        filtered = self._get_filtered_matches()
-        if not rpp or not filtered:
+        matches = self._get_display_matches()
+        if not rpp or not matches:
             return 1
-        return max(1, (len(filtered) + rpp - 1) // rpp)
+        return max(1, (len(matches) + rpp - 1) // rpp)
 
     def _display_page(self):
         filtered = self._get_filtered_matches()
+        display_matches = self._get_display_matches()
 
         # --- W-L record label ---
         _pid = str(self._current_player_id or "")
@@ -414,9 +474,9 @@ class MatchesPage(QWidget):
 
         if rpp:
             start = (self._current_page - 1) * rpp
-            page = filtered[start:start + rpp]
+            page = display_matches[start:start + rpp]
         else:
-            page = filtered
+            page = display_matches
 
         level_map = {
             "G": "Grand Slam",
@@ -491,14 +551,15 @@ class MatchesPage(QWidget):
         row = index.row()
         # Map visible row → absolute index in filtered matches
         filtered = self._get_filtered_matches()
+        display_matches = self._get_display_matches()
         rpp = self._rows_per_page()
         if rpp:
             start = (self._current_page - 1) * rpp
             abs_row = start + row
         else:
             abs_row = row
-        if 0 <= abs_row < len(filtered):
-            match = filtered[abs_row]
+        if 0 <= abs_row < len(display_matches):
+            match = display_matches[abs_row]
             # Column 1 = Tournament → navigate to Tournaments tab
             if index.column() == 1:
                 tourney_name = match.get("tourney_name", "")

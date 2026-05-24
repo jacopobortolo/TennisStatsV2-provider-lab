@@ -30,6 +30,23 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+_RETRYABLE_REMOTE_ERRORS = (
+    "server disconnected",
+    "connection reset",
+    "timed out",
+    "connection refused",
+    "temporarily unavailable",
+    "clientoserror",
+    "connection aborted",
+    "network name is no longer available",
+    "connection was aborted",
+    "winerror 1236",
+    "winerror 121",
+    "semaphore timeout period has expired",
+    "periodo di timeout del semaforo scaduto",
+    "connessione in rete terminata dal sistema locale",
+)
+
 
 # Tables whose contents are *entirely* scraped (no CSV-historical rows).
 # We mirror them by full-replace.  Cache tables are kept separate so callers
@@ -65,8 +82,8 @@ def _table_exists(local: sqlite3.Connection, name: str) -> bool:
     return cur.fetchone() is not None
 
 
-def _remote_columns(client, table: str) -> list[str]:
-    rs = client.execute(f"PRAGMA table_info({table})")
+def _remote_columns(client_ref, table: str) -> list[str]:
+    rs = _remote_execute(client_ref, f"PRAGMA table_info({table})")
     return [r[1] for r in rs.rows]
 
 
@@ -75,8 +92,38 @@ def _local_columns(local: sqlite3.Connection, table: str) -> list[str]:
     return [r[1] for r in cur.fetchall()]
 
 
+def _remote_execute(client_ref, sql: str, params: Optional[list] = None):
+    """Execute a Turso query with retry + client recreation on transient failures."""
+    params = list(params or [])
+    last_exc = None
+    for attempt in range(4):
+        try:
+            client = client_ref["client"]
+            if params:
+                return client.execute(sql, params)
+            return client.execute(sql)
+        except Exception as exc:
+            msg = str(exc).lower()
+            if any(token in msg for token in _RETRYABLE_REMOTE_ERRORS):
+                last_exc = exc
+                wait = 2 ** attempt
+                logger.warning(
+                    "Turso sync transient error (attempt %d/4): %s — retrying in %ds",
+                    attempt + 1, exc, wait,
+                )
+                time.sleep(wait)
+                try:
+                    client_ref["client"].close()
+                except Exception:
+                    pass
+                client_ref["client"] = client_ref["factory"]()
+                continue
+            raise
+    raise last_exc
+
+
 def _stream_table_rows(
-    client,
+    client_ref,
     table: str,
     cols: list[str],
     where: Optional[str] = None,
@@ -94,7 +141,7 @@ def _stream_table_rows(
             f"WHERE {where_sql}rowid > ? "
             "ORDER BY rowid LIMIT ?"
         )
-        rs = client.execute(paged_sql, params + [last_rowid, page])
+        rs = _remote_execute(client_ref, paged_sql, params + [last_rowid, page])
         if not rs.rows:
             return
         rows = [tuple(r) for r in rs.rows]
@@ -105,7 +152,7 @@ def _stream_table_rows(
 
 
 def _copy_table(
-    client,
+    client_ref,
     local: sqlite3.Connection,
     table: str,
     where: Optional[str] = None,
@@ -118,7 +165,7 @@ def _copy_table(
         logger.info("  %s: not present locally, skipping", table)
         return 0
 
-    remote_cols = _remote_columns(client, table)
+    remote_cols = _remote_columns(client_ref, table)
     if not remote_cols:
         logger.info("  %s: not present remotely, skipping", table)
         return 0
@@ -140,7 +187,7 @@ def _copy_table(
     insert_sql = f"{verb} INTO {table} ({', '.join(cols)}) VALUES ({placeholders})"
 
     total = 0
-    for _, page_rows in _stream_table_rows(client, table, cols, where, sel_params):
+    for _, page_rows in _stream_table_rows(client_ref, table, cols, where, sel_params):
         local.executemany(insert_sql, page_rows)
         total += len(page_rows)
         if progress_callback:
@@ -597,8 +644,11 @@ def sync_cloud_to_local(
             match_provider or "all", include_players, include_caches,
             include_extended,
         )
-    client = libsql_client.create_client_sync(
-        url=_http_url(), auth_token=_auth_token())
+    def _client_factory():
+        return libsql_client.create_client_sync(
+            url=_http_url(), auth_token=_auth_token())
+
+    client_ref = {"client": _client_factory(), "factory": _client_factory}
 
     local = sqlite3.connect(str(local_db_path))
     local.execute("PRAGMA busy_timeout=10000")
@@ -615,7 +665,7 @@ def sync_cloud_to_local(
             provider = str(match_provider).strip().lower().replace("'", "''")
             matches_where += f" AND scrape_provider='{provider}'"
         counts["matches"] = _copy_table(
-            client, local, "matches",
+            client_ref, local, "matches",
             where=matches_where,
             progress_callback=progress_callback,
         )
@@ -662,7 +712,7 @@ def sync_cloud_to_local(
 
         # 2) rankings: only the live snapshot
         counts["rankings"] = _copy_table(
-            client, local, "rankings",
+            client_ref, local, "rankings",
             where="ranking_date='LIVE'",
             progress_callback=progress_callback,
         )
@@ -671,7 +721,7 @@ def sync_cloud_to_local(
         if include_players:
             for t in UPSERT_TABLES:
                 counts[t] = _copy_table(
-                    client, local, t,
+                    client_ref, local, t,
                     upsert=True, delete_local=False,
                     progress_callback=progress_callback,
                 )
@@ -684,7 +734,7 @@ def sync_cloud_to_local(
             replace_tables.extend(EXTENDED_REPLACE_TABLES)
         for t in replace_tables:
             counts[t] = _copy_table(
-                client, local, t,
+                client_ref, local, t,
                 progress_callback=progress_callback,
             )
 
@@ -697,7 +747,7 @@ def sync_cloud_to_local(
         raise
     finally:
         try:
-            client.close()
+            client_ref["client"].close()
         except Exception:
             pass
         local.close()

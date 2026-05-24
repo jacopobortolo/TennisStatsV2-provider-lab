@@ -124,8 +124,19 @@ class RemoteConnection:
         self.row_factory = None  # ignored; rows are tuples
 
     def execute(self, sql, params=()):
-        _RETRYABLE = ("server disconnected", "connection reset", "timed out",
-                      "connection refused", "temporarily unavailable")
+        _RETRYABLE = (
+            "server disconnected",
+            "connection reset",
+            "timed out",
+            "connection refused",
+            "temporarily unavailable",
+            "clientoserror",
+            "connection aborted",
+            "network name is no longer available",
+            "connection was aborted",
+            "winerror 1236",
+            "connessione in rete terminata dal sistema locale",
+        )
         last_exc = None
         for attempt in range(4):
             try:
