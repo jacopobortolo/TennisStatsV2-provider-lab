@@ -2,15 +2,106 @@
 Rankings browser page.
 """
 
+from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QLineEdit, QSizePolicy,
 )
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QThread, Signal, QSize
+from PySide6.QtGui import QColor, QIcon, QPixmap
 
+from ...core.data_manager import get_data_dir
 from ..widgets import DataTable, Separator, PillButtonGroup, SectionHeader
 from ..theme import COLORS
+
+
+_IOC_TO_ISO2 = {
+    "ALG": "DZ", "AND": "AD", "ARG": "AR", "ARM": "AM",
+    "AUS": "AU", "AUT": "AT", "AZE": "AZ", "BAH": "BS",
+    "BAR": "BB", "BEL": "BE", "BER": "BM", "BIH": "BA",
+    "BLR": "BY", "BOL": "BO", "BRA": "BR", "BUL": "BG",
+    "CAN": "CA", "CHI": "CL", "CHN": "CN", "CIV": "CI",
+    "CMR": "CM", "COL": "CO", "CRC": "CR", "CRO": "HR",
+    "CUB": "CU", "CYP": "CY", "CZE": "CZ", "DEN": "DK",
+    "DOM": "DO", "ECU": "EC", "EGY": "EG", "ESA": "SV",
+    "ESP": "ES", "EST": "EE", "FIN": "FI", "FRA": "FR",
+    "GBR": "GB", "GEO": "GE", "GER": "DE", "GHA": "GH",
+    "GRE": "GR", "GUA": "GT", "HKG": "HK", "HON": "HN",
+    "HUN": "HU", "IND": "IN", "INA": "ID", "IRI": "IR",
+    "IRL": "IE", "ISL": "IS", "ISR": "IL", "ISV": "VI",
+    "ITA": "IT", "JAM": "JM", "JPN": "JP", "JOR": "JO",
+    "KAZ": "KZ", "KEN": "KE", "KGZ": "KG", "KOR": "KR",
+    "KOS": "XK", "KSA": "SA", "KUW": "KW", "LAT": "LV",
+    "LBN": "LB", "LIE": "LI", "LTU": "LT", "LUX": "LU",
+    "MAD": "MG", "MAR": "MA", "MAS": "MY", "MDA": "MD",
+    "MEX": "MX", "MKD": "MK", "MGL": "MN", "MON": "MC",
+    "MNE": "ME", "NAM": "NA", "NCA": "NI", "NED": "NL",
+    "NGR": "NG", "NOR": "NO", "NZL": "NZ", "OMA": "OM",
+    "PAK": "PK", "PAN": "PA", "PAR": "PY", "PER": "PE",
+    "PHI": "PH", "POL": "PL", "POR": "PT", "PUR": "PR",
+    "QAT": "QA", "ROU": "RO", "RSA": "ZA", "RUS": "RU",
+    "SEN": "SN", "SGP": "SG", "SLO": "SI", "SMR": "SM",
+    "SRB": "RS", "SUI": "CH", "SVK": "SK", "SWE": "SE",
+    "SYR": "SY", "TAN": "TZ", "THA": "TH", "TPE": "TW",
+    "TRI": "TT", "TUN": "TN", "TUR": "TR", "UAE": "AE",
+    "UGA": "UG", "UKR": "UA", "URU": "UY", "USA": "US",
+    "UZB": "UZ", "VEN": "VE", "VIE": "VN", "ZIM": "ZW",
+}
+
+_FLAG_ICON_CACHE: dict[str, QIcon] = {}
+_FLAG_ICON_MISSING: set[str] = set()
+
+
+def _country_label(ioc: str | None) -> str:
+    code = str(ioc or "").strip().upper()
+    return code
+
+
+def _flag_cache_dir() -> Path:
+    path = Path(get_data_dir()) / "flag_cache"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _flag_icon(ioc: str | None) -> QIcon | None:
+    code = str(ioc or "").strip().upper()
+    if not code:
+        return None
+    if code in _FLAG_ICON_CACHE:
+        return _FLAG_ICON_CACHE[code]
+    if code in _FLAG_ICON_MISSING:
+        return None
+
+    iso2 = _IOC_TO_ISO2.get(code, code if len(code) == 2 else "")
+    iso2 = iso2.strip().lower()
+    if len(iso2) != 2 or not iso2.isalpha():
+        _FLAG_ICON_MISSING.add(code)
+        return None
+
+    cache_path = _flag_cache_dir() / f"{iso2}.png"
+    pixmap = QPixmap()
+    if cache_path.exists() and pixmap.load(str(cache_path)):
+        icon = QIcon(pixmap)
+        _FLAG_ICON_CACHE[code] = icon
+        return icon
+
+    url = f"https://flagcdn.com/w20/{iso2}.png"
+    try:
+        with urlopen(url, timeout=4) as response:
+            data = response.read()
+        cache_path.write_bytes(data)
+        if pixmap.loadFromData(data):
+            icon = QIcon(pixmap)
+            _FLAG_ICON_CACHE[code] = icon
+            return icon
+    except (OSError, URLError, TimeoutError, ValueError):
+        pass
+
+    _FLAG_ICON_MISSING.add(code)
+    return None
 
 
 class _RankingScrapeWorker(QThread):
@@ -117,10 +208,11 @@ class RankingsPage(QWidget):
 
         # --- Rankings table ---
         self.table = DataTable([
-            ("Rank", 55), ("Player", 200), ("Country", 65), ("Points", 80),
+            ("Rank", 55), ("Player", 200), ("Country", 88), ("Points", 80),
             ("Age", 45), ("+/- Rank", 70), ("+/- Pts", 70),
             ("Next Tournament", 180),
         ])
+        self.table.setIconSize(QSize(20, 14))
         layout.addWidget(self.table, 1)
 
         self._populate_date_selector()
@@ -238,7 +330,7 @@ class RankingsPage(QWidget):
             rows.append([
                 str(g("rank")),
                 name,
-                str(g("ioc")),
+                _country_label(r.get("ioc")),
                 str(g("points")),
                 str(g("age")),
                 rank_diff,
@@ -258,6 +350,13 @@ class RankingsPage(QWidget):
                     pass
 
         self.table.populate(rows)
+
+        for row_idx, ranking in enumerate(rankings):
+            item = self.table.item(row_idx, 2)
+            if item:
+                icon = _flag_icon(ranking.get("ioc"))
+                if icon is not None:
+                    item.setIcon(icon)
 
         # Apply colors
         for r_idx, c_idx, color in row_colors:
