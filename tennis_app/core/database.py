@@ -229,6 +229,8 @@ def _sofascore_round_from_ordinal(ordinal):
         return "Q1"
     if ordinal == 2:
         return "Q2"
+    if ordinal == 3:
+        return "Q3"
     return None
 
 
@@ -238,14 +240,19 @@ def _canonical_scraped_round(round_name, level=None, provider=None):
         return round_name
     raw = round_name.strip()
     label = re.sub(r"[^a-z0-9]+", " ", raw.lower()).strip()
-    if raw in {"Q1", "Q2"}:
+    level_text = str(level or "").strip().upper()
+    if raw in {"Q1", "Q2", "Q3"}:
         return raw
     if "qual" in label:
-        if "final" in label or re.search(r"\b(?:2|2nd|second)\b", label):
+        if re.search(r"\b(?:3|3rd|third)\b", label):
+            return "Q3"
+        if "final" in label:
+            return "Q3" if level_text == "G" else "Q2"
+        if re.search(r"\b(?:2|2nd|second)\b", label):
             return "Q2"
         return "Q1"
     is_sofascore = str(provider or "").strip().lower() == "sofascore"
-    if is_sofascore and re.fullmatch(r"R[12]", raw.upper()):
+    if is_sofascore and re.fullmatch(r"R[123]", raw.upper()):
         mapped = _sofascore_round_from_ordinal(int(raw[1:]))
         if mapped:
             return mapped
@@ -256,6 +263,70 @@ def _canonical_scraped_round(round_name, level=None, provider=None):
         if mapped:
             return mapped
     return raw
+
+
+def _relabel_grand_slam_qualifying_rounds(matches):
+    """Repair Slam qualifying rounds from event date order.
+
+    Some live-provider rows arrive as a generic qualifying-final label that was
+    historically collapsed to Q2. For Grand Slams we can recover the intended
+    Q1/Q2/Q3 stage from the sequence of qualifying dates inside the same event.
+    """
+    if not matches:
+        return matches
+
+    grouped: dict[tuple[str, str, str], list[tuple[int, dict]]] = {}
+    for idx, match in enumerate(matches):
+        if str(match.get("tourney_level") or "").upper() != "G":
+            continue
+        if str(match.get("round") or "").upper() not in {"Q1", "Q2", "Q3"}:
+            continue
+        tourney_date = str(match.get("tourney_date") or "").strip()
+        if not tourney_date:
+            continue
+        key = (
+            str(match.get("tour") or "").lower(),
+            str(_normalize_tourney_name(match.get("tourney_name")) or "").lower(),
+            tourney_date[:4],
+        )
+        grouped.setdefault(key, []).append((idx, match))
+
+    if not grouped:
+        return matches
+
+    for group_matches in grouped.values():
+        if len(group_matches) < 3:
+            continue
+        ordered_matches = sorted(
+            group_matches,
+            key=lambda item: (
+                str(item[1].get("tourney_date") or ""),
+                int(item[1].get("match_num") or 0),
+                _player_match_key(item[1].get("winner_name") or ""),
+                _player_match_key(item[1].get("loser_name") or ""),
+            ),
+        )
+        player_paths: dict[str, list[int]] = {}
+        for idx, match in ordered_matches:
+            for side in ("winner_name", "loser_name"):
+                player_key = _player_match_key(match.get(side) or "")
+                if not player_key:
+                    continue
+                path = player_paths.setdefault(player_key, [])
+                if idx not in path:
+                    path.append(idx)
+
+        match_stage: dict[int, int] = {}
+        for path in player_paths.values():
+            for stage_idx, idx in enumerate(path, start=1):
+                match_stage[idx] = max(match_stage.get(idx, 0), stage_idx)
+
+        for idx, _match in ordered_matches:
+            stage = match_stage.get(idx)
+            if not stage:
+                continue
+            matches[idx]["round"] = "Q1" if stage == 1 else "Q2" if stage == 2 else "Q3"
+    return matches
 
 
 def _locked_write(method):
@@ -676,7 +747,9 @@ class TennisDatabase:
             );
         """)
         # Migrate existing rankings table: add columns introduced with
-        # the live-tennis.eu switch (safe to call repeatedly).
+        matches = [dict(r) for r in cur.fetchall()]
+        _relabel_grand_slam_qualifying_rounds(matches)
+        return matches
         for col, typ in [("age", "INTEGER"), ("rank_diff", "INTEGER"),
                          ("pts_diff", "INTEGER"), ("next_tournament", "TEXT"),
                          ("ioc", "TEXT")]:
@@ -1956,10 +2029,12 @@ class TennisDatabase:
                 END,
                 match_num DESC
         """, params)
+        fetched = [dict(r) for r in cur.fetchall()]
+        _relabel_grand_slam_qualifying_rounds(fetched)
+
         results = []
         seen = set()
-        for r in cur.fetchall():
-            d = dict(r)
+        for d in fetched:
             key = (_player_match_key(d.get("winner_name") or ""),
                    _player_match_key(d.get("loser_name") or ""),
                    d.get("round") or "", (d.get("score") or "").strip())
@@ -4291,11 +4366,18 @@ class TennisDatabase:
             UPDATE matches
             SET round = CASE
                 WHEN LOWER(COALESCE(round, '')) IN (
+                    'qualification round 3', 'qualifying round 3',
+                    'qualification third round', 'qualifying third round'
+                ) THEN 'Q3'
+                WHEN LOWER(COALESCE(round, '')) IN (
                     'qualification final', 'qualifying final',
                     'final qualifying round', 'qualification round 2',
                     'qualifying round 2', 'qualification second round',
                     'qualifying second round'
-                ) THEN 'Q2'
+                ) THEN CASE
+                    WHEN tourney_level = 'G' THEN 'Q3'
+                    ELSE 'Q2'
+                END
                 WHEN LOWER(COALESCE(round, '')) IN (
                     'qualification', 'qualifications', 'qualifying',
                     'qualification round 1', 'qualifying round 1',
@@ -4305,6 +4387,58 @@ class TennisDatabase:
             END
             WHERE tourney_id = 'SCRAPED'
               AND LOWER(COALESCE(round, '')) LIKE '%qual%'
+        """)
+
+        cur.execute("""
+            WITH qual_matches AS (
+                SELECT
+                    rowid,
+                    tour,
+                    LOWER(TRIM(COALESCE(tourney_name, ''))) AS tourney_key,
+                    SUBSTR(COALESCE(tourney_date, ''), 1, 4) AS year_key,
+                    tourney_date,
+                    COALESCE(match_num, 0) AS match_num,
+                    LOWER(TRIM(COALESCE(winner_name, ''))) AS winner_key,
+                    LOWER(TRIM(COALESCE(loser_name, ''))) AS loser_key
+                FROM matches
+                WHERE tourney_id = 'SCRAPED'
+                  AND tourney_level = 'G'
+                  AND round IN ('Q1', 'Q2', 'Q3')
+                  AND COALESCE(tourney_date, '') != ''
+            ), player_paths AS (
+                SELECT
+                    rowid,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY tour, tourney_key, year_key, player_key
+                        ORDER BY tourney_date, match_num, rowid
+                    ) AS stage_rank
+                FROM (
+                    SELECT rowid, tour, tourney_key, year_key,
+                           tourney_date, match_num, winner_key AS player_key
+                    FROM qual_matches
+                    WHERE winner_key != ''
+                    UNION ALL
+                    SELECT rowid, tour, tourney_key, year_key,
+                           tourney_date, match_num, loser_key AS player_key
+                    FROM qual_matches
+                    WHERE loser_key != ''
+                )
+            ), match_stage AS (
+                SELECT rowid, MAX(stage_rank) AS stage_rank
+                FROM player_paths
+                GROUP BY rowid
+            )
+            UPDATE matches
+            SET round = CASE (
+                SELECT stage_rank
+                FROM match_stage
+                WHERE match_stage.rowid = matches.rowid
+            )
+                WHEN 1 THEN 'Q1'
+                WHEN 2 THEN 'Q2'
+                ELSE 'Q3'
+            END
+            WHERE rowid IN (SELECT rowid FROM match_stage)
         """)
 
         kept_tourney_key = _tourney_name_sql_key("kept.tourney_name")
