@@ -281,12 +281,28 @@ def main(argv=None) -> int:
             for payload in tour_payloads.values()
         )
         if blocked:
+            imported_rows = sum(
+                int((payload.get("match_report") or {}).get("imported_rows", 0))
+                for payload in tour_payloads.values()
+            )
             for tour in tours:
                 payload = tour_payloads.get(tour, {})
                 _log_tour_report(tour, payload.get("match_report", {}), None)
+            if imported_rows > 0:
+                logger.warning(
+                    "Cloud scrape hit a match-provider block (%d access-denied "
+                    "failures) after importing %d rows; keeping partial results "
+                    "and skipping extended stats",
+                    blocked,
+                    imported_rows,
+                )
+                logger.info("Cloud scrape complete with provider block")
+                return 0
             logger.error(
                 "Cloud scrape blocked by match provider (%d access-denied "
-                "failures); leaving scrape fingerprints unchanged", blocked)
+                "failures) before any rows were imported",
+                blocked,
+            )
             return 1
 
         if not args.no_extended:

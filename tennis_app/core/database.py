@@ -747,9 +747,6 @@ class TennisDatabase:
             );
         """)
         # Migrate existing rankings table: add columns introduced with
-        matches = [dict(r) for r in cur.fetchall()]
-        _relabel_grand_slam_qualifying_rounds(matches)
-        return matches
         for col, typ in [("age", "INTEGER"), ("rank_diff", "INTEGER"),
                          ("pts_diff", "INTEGER"), ("next_tournament", "TEXT"),
                          ("ioc", "TEXT")]:
