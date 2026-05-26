@@ -114,6 +114,13 @@ class MatchesPage(QWidget):
         self.player_search.player_selected.connect(self._on_player_selected)
         header_row.addWidget(self.player_search)
 
+        header_row.addWidget(QLabel("Against"))
+        self.against_combo = QComboBox()
+        self.against_combo.setMinimumWidth(90)
+        self.against_combo.addItem("ALL")
+        self.against_combo.setEnabled(False)
+        header_row.addWidget(self.against_combo)
+
         header_row.addStretch()
         layout.addLayout(header_row)
 
@@ -232,7 +239,27 @@ class MatchesPage(QWidget):
         self._current_player_id = player["player_id"]
         self._current_player_tour = player.get("tour")
         self._current_player = f"{player['name_first']} {player['name_last']}"
+        self._reload_against_options()
         self._refetch_matches()
+
+    def _reload_against_options(self):
+        tour = (self._current_player_tour or "").strip().lower()
+        codes = []
+        if tour:
+            try:
+                codes = self.db.get_distinct_ioc_codes(tour=tour)
+            except Exception:
+                codes = []
+        self.against_combo.blockSignals(True)
+        self.against_combo.clear()
+        self.against_combo.addItem("ALL")
+        for code in codes:
+            text = str(code or "").strip().upper()
+            if text:
+                self.against_combo.addItem(text)
+        self.against_combo.setCurrentIndex(0)
+        self.against_combo.setEnabled(True)
+        self.against_combo.blockSignals(False)
 
     def _refresh_upcoming_banner_from_data(self, row):
         """Populate upcoming-match banner from pre-fetched row (or None)."""
@@ -288,6 +315,7 @@ class MatchesPage(QWidget):
             lambda _: self._filter_timer.start())
         self.round_pills.changed.connect(lambda _: self._filter_timer.start())
         self.rank_pills.changed.connect(lambda _: self._display_page())
+        self.against_combo.currentIndexChanged.connect(lambda _: self._display_page())
 
     def _refetch_matches(self):
         """Re-query the DB using current filter values for the selected player."""
@@ -350,22 +378,49 @@ class MatchesPage(QWidget):
         self._refresh_upcoming_banner_from_data(upcoming)
         self._display_page()
 
+    def _is_player_win(self, match):
+        player_id = str(self._current_player_id or "")
+        player_name = (self._current_player or "").replace("-", " ").strip().lower()
+        winner_id = str(match.get("winner_id") or "")
+        if player_id and winner_id:
+            return winner_id == player_id
+        winner_name = (match.get("winner_name") or "").replace("-", " ").strip().lower()
+        return winner_name == player_name
+
+    def _opponent_ioc(self, match):
+        if self._is_player_win(match):
+            return str(match.get("loser_ioc") or "").strip().upper()
+        return str(match.get("winner_ioc") or "").strip().upper()
+
+    @staticmethod
+    def _is_walkover(match):
+        score = str(match.get("score") or "").upper()
+        return "W/O" in score
+
+    def _current_filtered_streak(self, matches):
+        streak = 0
+        for match in matches:
+            if self._is_walkover(match):
+                continue
+            if self._is_player_win(match):
+                streak += 1
+                continue
+            break
+        return streak
+
     def _get_filtered_matches(self):
-        """Return _all_matches filtered by the opponent-rank pill."""
+        """Return _all_matches filtered by the active client-side filters."""
         rank_val = self.rank_pills.value()
-        if rank_val == "All":
-            return self._all_matches
-        limit = int(rank_val.split()[-1])  # "Top 10" → 10
-        _pid = str(self._current_player_id or "")
-        _pname = (self._current_player or "").replace("-", " ").strip().lower()
+        against_val = self.against_combo.currentText().strip().upper()
+        limit = None if rank_val == "All" else int(rank_val.split()[-1])
         result = []
         for m in self._all_matches:
-            wid = str(m.get("winner_id") or "")
-            if _pid and wid:
-                is_win = (wid == _pid)
-            else:
-                wname = (m.get("winner_name") or "").replace("-", " ").strip().lower()
-                is_win = (wname == _pname)
+            if against_val not in {"", "ALL"} and self._opponent_ioc(m) != against_val:
+                continue
+            if limit is None:
+                result.append(m)
+                continue
+            is_win = self._is_player_win(m)
             opp_rank = m.get("loser_rank") if is_win else m.get("winner_rank")
             try:
                 if opp_rank is not None and int(float(opp_rank)) <= limit:
@@ -442,23 +497,18 @@ class MatchesPage(QWidget):
         filtered = self._get_filtered_matches()
         display_matches = self._get_display_matches()
 
-        # --- W-L record label ---
-        _pid = str(self._current_player_id or "")
-        _pname = (self._current_player or "").replace("-", " ").strip().lower()
+        # --- Summary label ---
         wins = losses = 0
         for m in filtered:
-            wid = str(m.get("winner_id") or "")
-            if _pid and wid:
-                is_win = wid == _pid
-            else:
-                wname = (m.get("winner_name") or "").replace("-", " ").strip().lower()
-                is_win = wname == _pname
-            if is_win:
+            if self._is_player_win(m):
                 wins += 1
             else:
                 losses += 1
         if filtered:
-            self.wl_label.setText(f"  {wins}W – {losses}L")
+            current_streak = self._current_filtered_streak(filtered)
+            self.wl_label.setText(
+                f"Total {wins}W - {losses}L    Current streak {current_streak}W"
+            )
         else:
             self.wl_label.setText("")
 

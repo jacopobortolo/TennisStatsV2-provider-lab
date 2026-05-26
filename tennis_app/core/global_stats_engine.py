@@ -1275,7 +1275,16 @@ class GlobalStatsEngine:
     def _stat_streak_weeks_top10(self, filters, limit):
         return self._ranking_streak(filters, limit, 10)
 
-    def _ranking_streak(self, filters, limit, rank_limit):
+    def _stat_most_weeks_at_no1(self, filters, limit):
+        return self._ranking_total_weeks(filters, limit, 1)
+
+    def _stat_most_weeks_top3(self, filters, limit):
+        return self._ranking_total_weeks(filters, limit, 3)
+
+    def _stat_most_weeks_top10(self, filters, limit):
+        return self._ranking_total_weeks(filters, limit, 10)
+
+    def _ranking_week_coverage(self, filters, rank_limit):
         base_conditions = ["r.ranking_date GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'"]
         base_params = []
         tour_values = [tour.lower() for tour in self._filter_values(filters.get("tour"))]
@@ -1318,10 +1327,6 @@ class GlobalStatsEngine:
             except ValueError:
                 continue
             dates_by_tour[row["tour"]].append(date)
-        date_index = {
-            tour_name: {date: index for index, date in enumerate(dates)}
-            for tour_name, dates in dates_by_tour.items()
-        }
         next_date = {
             tour_name: {
                 date: (dates[index + 1] if index + 1 < len(dates) else date + timedelta(days=7))
@@ -1348,6 +1353,17 @@ class GlobalStatsEngine:
             key = (row["tour"], row["player_id"] or row["player"])
             names_by_key[key] = row["player"]
             dates_by_player[key].append(date)
+
+        return dates_by_player, names_by_key, next_date
+
+    def _ranking_streak(self, filters, limit, rank_limit):
+        dates_by_player, names_by_key, next_date = self._ranking_week_coverage(
+            filters, rank_limit)
+
+        date_index = {
+            tour_name: {date: index for index, date in enumerate(sorted(dates.keys()))}
+            for tour_name, dates in next_date.items()
+        }
 
         results = []
         for key, dates in dates_by_player.items():
@@ -1379,6 +1395,36 @@ class GlobalStatsEngine:
                 prev = date
 
             _flush()
+
+        return sorted(results, key=lambda r: (-r[1], r[0]))[:limit]
+
+    def _ranking_total_weeks(self, filters, limit, rank_limit):
+        dates_by_player, names_by_key, next_date = self._ranking_week_coverage(
+            filters, rank_limit)
+
+        results = []
+        for key, dates in dates_by_player.items():
+            tour_name = key[0]
+            next_dates = next_date.get(tour_name, {})
+            total_weeks = 0
+            first_date = None
+            last_date = None
+            player_name = names_by_key.get(key, key[1])
+
+            for date in dates:
+                coverage_end = next_dates.get(date, date + timedelta(days=7))
+                span_weeks = max(1, round((coverage_end - date).days / 7))
+                total_weeks += span_weeks
+                if first_date is None or date < first_date:
+                    first_date = date
+                coverage_last = coverage_end - timedelta(days=1)
+                if last_date is None or coverage_last > last_date:
+                    last_date = coverage_last
+
+            if total_weeks:
+                s = first_date.strftime("%Y-%m-%d") if first_date else ""
+                e = last_date.strftime("%Y-%m-%d") if last_date else ""
+                results.append((player_name, total_weeks, f"{s} to {e}"))
 
         return sorted(results, key=lambda r: (-r[1], r[0]))[:limit]
 
