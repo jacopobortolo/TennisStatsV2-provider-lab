@@ -6,6 +6,7 @@ import sqlite3
 import logging
 import re
 import threading
+import time
 import unicodedata
 import uuid
 from datetime import date, timedelta
@@ -408,6 +409,36 @@ class TennisDatabase:
         self.conn.execute("PRAGMA busy_timeout=10000")
         self._create_tables()
         self._run_analyze_once()
+
+    def _run_startup_migration(self, cur, migration, failure_message,
+                               retry_attempts=3):
+        """Run a non-fatal startup migration with targeted lock retries."""
+        for attempt in range(retry_attempts + 1):
+            try:
+                with self._write_lock:
+                    migration(cur)
+                return
+            except sqlite3.OperationalError as exc:
+                locked = "database is locked" in str(exc).lower()
+                if locked and not _is_remote_conn(self.conn) and attempt < retry_attempts:
+                    wait_s = min(2 ** attempt, 8)
+                    logger.warning(
+                        "Database locked during startup migration %s "
+                        "(attempt %d/%d); retrying in %ds",
+                        migration.__name__, attempt + 1, retry_attempts + 1,
+                        wait_s,
+                    )
+                    try:
+                        self.conn.rollback()
+                    except Exception:
+                        pass
+                    time.sleep(wait_s)
+                    continue
+                logger.exception(failure_message)
+                return
+            except Exception:
+                logger.exception(failure_message)
+                return
 
     def _create_tables(self):
         cur = self.conn.cursor()
@@ -876,12 +907,12 @@ class TennisDatabase:
         # tables and cache to the diacritic-free spelling used in the
         # ``players`` table (e.g. "Rafael Jódar" → "Rafael Jodar"), so
         # that lookups by ``f"{name_first} {name_last}"`` find the rows.
-        try:
-            self._migrate_normalize_extended_player_names(cur)
-        except Exception:
-            logger.exception(
-                "Failed to normalize extended-stats player names "
-                "(non-fatal, will retry on next start)")
+        self._run_startup_migration(
+            cur,
+            self._migrate_normalize_extended_player_names,
+            "Failed to normalize extended-stats player names "
+            "(non-fatal, will retry on next start)",
+        )
 
         # One-shot migration: canonicalize winner_name / loser_name in
         # the ``matches`` table against the spellings used in the
@@ -889,38 +920,38 @@ class TennisDatabase:
         # "Christopher O'Connell", "Marvin Möller" → "Marvin Moller"),
         # then collapse duplicate match rows that differed only by name
         # spelling.
-        try:
-            self._migrate_normalize_match_player_names(cur)
-        except Exception:
-            logger.exception(
-                "Failed to normalize matches.winner_name/loser_name "
-                "(non-fatal, will retry on next start)")
+        self._run_startup_migration(
+            cur,
+            self._migrate_normalize_match_player_names,
+            "Failed to normalize matches.winner_name/loser_name "
+            "(non-fatal, will retry on next start)",
+        )
 
         # One-shot migration: enforce provider priority on historical scraped
         # rows too.  Import already applies this for new rows, but databases may
         # contain duplicates created before provider-aware merging existed.
-        try:
-            self._migrate_prune_scraped_provider_duplicates(cur)
-        except Exception:
-            logger.exception(
-                "Failed to prune scraped provider duplicates "
-                "(non-fatal, will retry on next start)")
+        self._run_startup_migration(
+            cur,
+            self._migrate_prune_scraped_provider_duplicates,
+            "Failed to prune scraped provider duplicates "
+            "(non-fatal, will retry on next start)",
+        )
 
         # One-shot migration: fix scraped WTA matches stored with tour='atp'.
         # Uses the players table (which is correctly split by tour) to detect
         # WTA-only names and updates the tour field accordingly.
-        try:
-            self._migrate_fix_scraped_match_tour(cur)
-        except Exception:
-            logger.exception(
-                "Failed to fix scraped match tour field "
-                "(non-fatal, will retry on next start)")
-        try:
-            self._migrate_canonicalize_scraped_tourney_names(cur)
-        except Exception:
-            logger.exception(
-                "Failed to canonicalize scraped tournament names "
-                "(non-fatal, will retry on next start)")
+        self._run_startup_migration(
+            cur,
+            self._migrate_fix_scraped_match_tour,
+            "Failed to fix scraped match tour field "
+            "(non-fatal, will retry on next start)",
+        )
+        self._run_startup_migration(
+            cur,
+            self._migrate_canonicalize_scraped_tourney_names,
+            "Failed to canonicalize scraped tournament names "
+            "(non-fatal, will retry on next start)",
+        )
         # --- Phase 2 composite indexes for faster queries ---
         cur.executescript("""
             -- Matches: composite indexes for common query patterns
