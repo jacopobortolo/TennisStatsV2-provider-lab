@@ -2748,7 +2748,7 @@ class TennisDatabase:
     @_locked_write
     def import_scraped_matches(self, matches_df, progress_callback=None,
                                scraped_player_names=None,
-                               replace_existing=True):
+                               replace_existing=False):
         """
         Import scraped match data into the database.
 
@@ -2761,7 +2761,7 @@ class TennisDatabase:
             Names of the players whose full career was explicitly scraped.
             Old SCRAPED matches for these players will be deleted before
             re-importing.  If None, detected automatically via frequency.
-        replace_existing : bool, default True
+        replace_existing : bool, default False
             If True, delete existing SCRAPED matches for *scraped_player_names*
             before inserting (full refresh).  If False, only insert rows
             that aren't already in the matches table (incremental refresh
@@ -3058,6 +3058,9 @@ class TennisDatabase:
         s_provider = (
             "LOWER(COALESCE(NULLIF(s.scrape_provider, ''), 'tennisabstract'))"
         )
+        remote_incremental_preserve = (
+            not replace_existing and hasattr(self.conn, "_client")
+        )
         try:
             matches_df.to_sql(staging_name, self.conn, if_exists="replace", index=False)
             ref_sf_tourney_key = _tourney_name_sql_key("ref.tourney_name")
@@ -3187,37 +3190,38 @@ class TennisDatabase:
                            OR ta.tourney_level != sf.tourney_level
                     )
                 """)
-                self.conn.execute(f"""
-                    DELETE FROM matches
-                    WHERE rowid IN (
-                        SELECT sf.rowid
-                        FROM matches sf
-                        JOIN matches ta
-                          ON ta.tourney_id = 'SCRAPED'
-                         AND sf.tourney_id = 'SCRAPED'
-                         AND ta.scrape_provider = 'tennisabstract'
-                         AND sf.scrape_provider = 'sofascore'
-                         AND ta.tour = sf.tour
-                         AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
-                         AND ta.winner_name = sf.winner_name
-                         AND ta.loser_name = sf.loser_name
-                         AND (
-                            (sf.round = 'R1' AND ta.round = 'Q1')
-                            OR (sf.round = 'R2' AND ta.round = 'Q2')
-                         )
-                         AND (
-                            COALESCE(ta.score, '') = COALESCE(sf.score, '')
-                            OR ta.score LIKE COALESCE(sf.score, '') || '%'
-                            OR sf.score LIKE COALESCE(ta.score, '') || '%'
-                         )
-                         AND ABS(
-                            CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
-                            - CAST(ta.tourney_date AS INTEGER)
-                         ) <= 3
-                        WHERE {ta_tourney_key} = {sf_tourney_key}
-                           OR ta.tourney_level != sf.tourney_level
-                    )
-                """)
+                if not remote_incremental_preserve:
+                    self.conn.execute(f"""
+                        DELETE FROM matches
+                        WHERE rowid IN (
+                            SELECT sf.rowid
+                            FROM matches sf
+                            JOIN matches ta
+                               ON ta.tourney_id = 'SCRAPED'
+                              AND sf.tourney_id = 'SCRAPED'
+                              AND ta.scrape_provider = 'tennisabstract'
+                              AND sf.scrape_provider = 'sofascore'
+                              AND ta.tour = sf.tour
+                              AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                              AND ta.winner_name = sf.winner_name
+                              AND ta.loser_name = sf.loser_name
+                              AND (
+                                  (sf.round = 'R1' AND ta.round = 'Q1')
+                                  OR (sf.round = 'R2' AND ta.round = 'Q2')
+                              )
+                              AND (
+                                  COALESCE(ta.score, '') = COALESCE(sf.score, '')
+                                  OR ta.score LIKE COALESCE(sf.score, '') || '%'
+                                  OR sf.score LIKE COALESCE(ta.score, '') || '%'
+                              )
+                              AND ABS(
+                                  CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
+                                  - CAST(ta.tourney_date AS INTEGER)
+                              ) <= 3
+                            WHERE {ta_tourney_key} = {sf_tourney_key}
+                               OR ta.tourney_level != sf.tourney_level
+                        )
+                    """)
                 self.conn.execute(f"""
                     DELETE FROM {staging_name}
                     WHERE rowid IN (
@@ -3239,28 +3243,29 @@ class TennisDatabase:
                          ) <= 7
                     )
                 """)
-                self.conn.execute(f"""
-                    DELETE FROM matches
-                    WHERE rowid IN (
-                        SELECT sf.rowid
-                        FROM matches sf
-                        JOIN matches ta
-                          ON ta.tourney_id = 'SCRAPED'
-                         AND sf.tourney_id = 'SCRAPED'
-                         AND ta.scrape_provider = 'tennisabstract'
-                         AND sf.scrape_provider = 'sofascore'
-                         AND ta.tour = sf.tour
-                         AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
-                         AND ta.winner_name = sf.winner_name
-                         AND ta.loser_name = sf.loser_name
-                         AND ta.round = sf.round
-                         AND {ta_tourney_key} = {sf_tourney_key}
-                         AND ABS(
-                            CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
-                            - CAST(ta.tourney_date AS INTEGER)
-                         ) <= 7
-                    )
-                """)
+                if not remote_incremental_preserve:
+                    self.conn.execute(f"""
+                        DELETE FROM matches
+                        WHERE rowid IN (
+                            SELECT sf.rowid
+                            FROM matches sf
+                            JOIN matches ta
+                              ON ta.tourney_id = 'SCRAPED'
+                             AND sf.tourney_id = 'SCRAPED'
+                             AND ta.scrape_provider = 'tennisabstract'
+                             AND sf.scrape_provider = 'sofascore'
+                             AND ta.tour = sf.tour
+                             AND SUBSTR(ta.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                             AND ta.winner_name = sf.winner_name
+                             AND ta.loser_name = sf.loser_name
+                             AND ta.round = sf.round
+                             AND {ta_tourney_key} = {sf_tourney_key}
+                             AND ABS(
+                                CAST(COALESCE(NULLIF(sf.source_match_date, ''), sf.tourney_date) AS INTEGER)
+                                - CAST(ta.tourney_date AS INTEGER)
+                             ) <= 7
+                        )
+                    """)
             self.conn.execute(f"""
                 DELETE FROM {staging_name}
                 WHERE rowid IN (
@@ -3283,21 +3288,42 @@ class TennisDatabase:
                       AND ({m_provider}) = 'tennisabstract'
                 )
             """)
-            self.conn.execute(f"""
-                DELETE FROM matches
-                WHERE rowid IN (
-                    SELECT m.rowid
-                    FROM matches m
-                    JOIN {staging_name} s
-                      ON {match_key}
-                    WHERE m.tourney_id = 'SCRAPED'
-                      AND (
-                        ({m_provider}) = {s_provider}
-                        OR ({s_provider} = 'tennisabstract'
-                            AND ({m_provider}) = 'sofascore')
-                      )
+            if remote_incremental_preserve:
+                logger.info(
+                    "Remote incremental import: preserving existing SCRAPED rows "
+                    "to avoid delete-before-insert loss on network timeouts"
                 )
-            """)
+                self.conn.execute(f"""
+                    DELETE FROM {staging_name}
+                    WHERE rowid IN (
+                        SELECT s.rowid
+                        FROM {staging_name} s
+                        JOIN matches m
+                          ON {match_key}
+                        WHERE m.tourney_id = 'SCRAPED'
+                          AND (
+                            ({m_provider}) = {s_provider}
+                            OR ({s_provider} = 'tennisabstract'
+                                AND ({m_provider}) = 'sofascore')
+                          )
+                    )
+                """)
+            else:
+                self.conn.execute(f"""
+                    DELETE FROM matches
+                    WHERE rowid IN (
+                        SELECT m.rowid
+                        FROM matches m
+                        JOIN {staging_name} s
+                          ON {match_key}
+                        WHERE m.tourney_id = 'SCRAPED'
+                          AND (
+                            ({m_provider}) = {s_provider}
+                            OR ({s_provider} = 'tennisabstract'
+                                AND ({m_provider}) = 'sofascore')
+                          )
+                    )
+                """)
             count_row = self.conn.execute(
                 f"SELECT COUNT(*) FROM {staging_name}").fetchone()
             new_count = count_row[0]

@@ -113,6 +113,7 @@ Turso back into the local SQLite database.
 | `cloud/scrape_job.py` | GitHub Actions entrypoint (`python -m cloud.scrape_job`) |
 | `cloud/db.py` | Turso HTTP connection helpers |
 | `cloud/sync.py` | Download Turso data → merge into local SQLite |
+| `.github/workflows/scrape_top_n_players.yml` | Manual GitHub Action to scrape the top N ranked players into Turso |
 | `.github/workflows/scrape.yml` | 4-hourly cron workflow |
 | `requirements-cloud.txt` | Server-side deps (no PySide6) |
 
@@ -131,3 +132,29 @@ The timeout is 350 minutes. If it still times out, reduce `top_n` via manual dis
 
 **Turso token expired**
 Re-generate: `turso db tokens create tennis-stats --expiration none` and update the GitHub secret.
+
+## Recovering SCRAPED matches
+
+Every cloud scrape now stores a Turso-side backup of the current `SCRAPED`
+rows before importing new data.
+
+List recent backups:
+
+```powershell
+python -m cloud.restore_scraped_backup --list
+```
+
+Restore the latest backup:
+
+```powershell
+python -m cloud.restore_scraped_backup --latest --yes
+```
+
+Restore a specific backup run:
+
+```powershell
+python -m cloud.restore_scraped_backup --backup-run-id 20260527T101500Z --yes
+```
+
+The restore command creates a fresh safety snapshot of the current `SCRAPED`
+state before overwriting anything.

@@ -4,6 +4,10 @@ and write to the local DB or directly to Turso.
 Usage:
     python -m tennis_app.scripts.scrape_single_player \
         --name "Rafael Jodar" --tour atp --cloud
+
+By default match imports are incremental and preserve existing SCRAPED rows.
+Use --replace-existing only when you have verified the scrape is a full
+replacement for that player's existing live rows.
 """
 
 import argparse
@@ -35,7 +39,22 @@ def main() -> int:
     parser.add_argument("--match-provider", default=None,
                         choices=["tennisabstract", "sofascore", "hybrid"],
                         help="Live match provider for this lab copy")
+    parser.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help=(
+            "Delete existing SCRAPED rows for this player/provider before "
+            "importing. Dangerous for --cloud unless the scrape is known to "
+            "be complete."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.cloud and args.replace_existing and args.min_year is not None:
+        parser.error(
+            "--replace-existing cannot be combined with --cloud and --min-year; "
+            "that would delete older cloud rows for the player."
+        )
 
     if args.cloud:
         from cloud.db import RemoteTennisDatabase
@@ -46,6 +65,10 @@ def main() -> int:
         db = TennisDatabase()
         target = "local"
     logger.info("Target DB: %s", target)
+    if args.cloud and not args.replace_existing:
+        logger.info("Cloud mode uses incremental match import; existing SCRAPED rows are preserved")
+    elif args.replace_existing:
+        logger.warning("Destructive replace enabled: existing SCRAPED rows for this player/provider will be deleted before import")
 
     rc = 0
     try:
@@ -61,7 +84,7 @@ def main() -> int:
             if not df.empty:
                 imported = db.import_scraped_matches(
                     df, scraped_player_names=[args.name],
-                    replace_existing=True)
+                    replace_existing=args.replace_existing)
                 logger.info("  imported %d new rows", imported)
             else:
                 logger.warning("  no matches returned by scraper")

@@ -25,6 +25,13 @@ import requests
 logger = logging.getLogger("cloud.scrape_job")
 
 
+SCRAPED_BACKUP_RETENTION_RUNS = 5
+SCRAPE_DROP_GUARD_PROVIDER = "tennisabstract"
+SCRAPE_DROP_GUARD_MIN_PREVIOUS = 8
+SCRAPE_DROP_GUARD_MIN_ABSOLUTE_DROP = 4
+SCRAPE_DROP_GUARD_MIN_RATIO = 0.5
+
+
 PLAYERS_URLS = {
     "atp": "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master/atp_players.csv",
     "wta": "https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master/wta_players.csv",
@@ -84,6 +91,218 @@ def _log_tour_report(tour, match_report, extended_report=None):
         extended_report.get("empty", 0),
         extended_report.get("errors", 0),
         extended_report.get("rows", 0),
+    )
+
+
+def _iter_chunks(items, size):
+    for idx in range(0, len(items), size):
+        yield items[idx:idx + size]
+
+
+def _ensure_scraped_backup_tables(db):
+    db.conn.execute("""
+        CREATE TABLE IF NOT EXISTS scraped_match_backup_runs (
+            backup_run_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            match_provider TEXT,
+            tours TEXT,
+            top_n INTEGER,
+            min_year INTEGER,
+            max_matches_per_player INTEGER,
+            row_count INTEGER DEFAULT 0
+        )
+    """)
+    db.conn.execute(
+        "CREATE TABLE IF NOT EXISTS matches_scraped_backup "
+        "AS SELECT * FROM matches WHERE 0"
+    )
+
+    source_cols = {
+        row[1]: (row[2] or "TEXT")
+        for row in db.conn.execute("PRAGMA table_info(matches)").fetchall()
+    }
+    backup_cols = {
+        row[1]: (row[2] or "TEXT")
+        for row in db.conn.execute(
+            "PRAGMA table_info(matches_scraped_backup)"
+        ).fetchall()
+    }
+    for col_name, col_type in source_cols.items():
+        if col_name in backup_cols:
+            continue
+        db.conn.execute(
+            f"ALTER TABLE matches_scraped_backup "
+            f"ADD COLUMN {col_name} {col_type}"
+        )
+    for col_name, col_type in (
+        ("backup_run_id", "TEXT"),
+        ("backup_taken_at", "TEXT"),
+    ):
+        if col_name in backup_cols:
+            continue
+        db.conn.execute(
+            f"ALTER TABLE matches_scraped_backup "
+            f"ADD COLUMN {col_name} {col_type}"
+        )
+    db.conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_matches_scraped_backup_run "
+        "ON matches_scraped_backup(backup_run_id)"
+    )
+    db.conn.commit()
+
+
+def _backup_scraped_matches(db, *, tours, match_provider, top_n,
+                            min_year, max_matches_per_player):
+    _ensure_scraped_backup_tables(db)
+    backup_run_id = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    backup_taken_at = datetime.utcnow().isoformat()
+    row_count = db.conn.execute(
+        "SELECT COUNT(*) FROM matches WHERE tourney_id = 'SCRAPED'"
+    ).fetchone()[0]
+    db.conn.execute(
+        "INSERT INTO scraped_match_backup_runs "
+        "(backup_run_id, created_at, match_provider, tours, top_n, "
+        " min_year, max_matches_per_player, row_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            backup_run_id,
+            backup_taken_at,
+            match_provider or "env/default",
+            ",".join(tours),
+            int(top_n),
+            min_year,
+            max_matches_per_player,
+            int(row_count),
+        ),
+    )
+    source_cols = [
+        row[1] for row in db.conn.execute("PRAGMA table_info(matches)").fetchall()
+    ]
+    cols_csv = ", ".join(source_cols)
+    db.conn.execute(
+        f"INSERT INTO matches_scraped_backup "
+        f"({cols_csv}, backup_run_id, backup_taken_at) "
+        f"SELECT {cols_csv}, ?, ? FROM matches WHERE tourney_id = 'SCRAPED'",
+        (backup_run_id, backup_taken_at),
+    )
+
+    backup_ids = [
+        row[0] for row in db.conn.execute(
+            "SELECT backup_run_id FROM scraped_match_backup_runs "
+            "ORDER BY created_at DESC"
+        ).fetchall()
+    ]
+    stale_ids = backup_ids[SCRAPED_BACKUP_RETENTION_RUNS:]
+    if stale_ids:
+        for chunk in _iter_chunks(stale_ids, 200):
+            placeholders = ",".join("?" for _ in chunk)
+            db.conn.execute(
+                f"DELETE FROM matches_scraped_backup "
+                f"WHERE backup_run_id IN ({placeholders})",
+                chunk,
+            )
+            db.conn.execute(
+                f"DELETE FROM scraped_match_backup_runs "
+                f"WHERE backup_run_id IN ({placeholders})",
+                chunk,
+            )
+    db.conn.commit()
+    logger.info(
+        "Backed up %d SCRAPED rows to Turso backup_run_id=%s "
+        "(retention=%d runs)",
+        row_count,
+        backup_run_id,
+        SCRAPED_BACKUP_RETENTION_RUNS,
+    )
+    return backup_run_id, row_count
+
+
+def _get_previous_scrape_counts(db, player_names, scrape_provider):
+    if not player_names:
+        return {}
+    from tennis_app.core.scraper import clean_player_name
+
+    storage_names = []
+    seen = set()
+    for raw_name in player_names:
+        storage_name = clean_player_name(raw_name) or raw_name
+        if not storage_name or storage_name in seen:
+            continue
+        seen.add(storage_name)
+        storage_names.append(storage_name)
+
+    out = {}
+    for chunk in _iter_chunks(storage_names, 400):
+        placeholders = ",".join("?" for _ in chunk)
+        rows = db.conn.execute(
+            "SELECT player_name, match_count FROM scrape_cache_provider "
+            f"WHERE scrape_provider = ? AND player_name IN ({placeholders})",
+            [scrape_provider] + chunk,
+        ).fetchall()
+        for player_name, match_count in rows:
+            out[player_name] = int(match_count or 0)
+    return out
+
+
+def _incoming_match_counts(matches_df, scraped_names):
+    if matches_df is None or matches_df.empty or not scraped_names:
+        return {}
+    from tennis_app.core.scraper import clean_player_name
+
+    tracked = {}
+    for raw_name in scraped_names:
+        storage_name = clean_player_name(raw_name) or raw_name
+        if storage_name:
+            tracked[storage_name] = 0
+    if not tracked:
+        return {}
+
+    for col in ("winner_name", "loser_name"):
+        if col not in matches_df.columns:
+            continue
+        counts = (
+            matches_df[col]
+            .dropna()
+            .astype(str)
+            .map(lambda name: clean_player_name(name) or name)
+            .value_counts()
+        )
+        for player_name in tracked:
+            tracked[player_name] += int(counts.get(player_name, 0))
+    return tracked
+
+
+def _guard_against_suspicious_drops(db, matches_df, scraped_names,
+                                    scrape_provider):
+    if scrape_provider != SCRAPE_DROP_GUARD_PROVIDER:
+        return
+    previous_counts = _get_previous_scrape_counts(
+        db, scraped_names, scrape_provider=scrape_provider)
+    incoming_counts = _incoming_match_counts(matches_df, scraped_names)
+    suspicious = []
+    for player_name, previous_count in previous_counts.items():
+        incoming_count = int(incoming_counts.get(player_name, 0))
+        if previous_count < SCRAPE_DROP_GUARD_MIN_PREVIOUS:
+            continue
+        if incoming_count >= previous_count:
+            continue
+        if (previous_count - incoming_count) < SCRAPE_DROP_GUARD_MIN_ABSOLUTE_DROP:
+            continue
+        if incoming_count > previous_count * SCRAPE_DROP_GUARD_MIN_RATIO:
+            continue
+        suspicious.append((player_name, previous_count, incoming_count))
+
+    if not suspicious:
+        return
+
+    suspicious.sort(key=lambda item: (item[2] / item[1], item[1]))
+    examples = ", ".join(
+        f"{name}: prev={prev}, now={curr}"
+        for name, prev, curr in suspicious[:10]
+    )
+    raise RuntimeError(
+        "Cloud import guard-rail blocked a suspicious TennisAbstract drop "
+        f"for {len(suspicious)} players: {examples}"
     )
 
 
@@ -198,6 +417,7 @@ def main(argv=None) -> int:
 
     from .db import RemoteTennisDatabase
     from tennis_app.core.data_manager import (
+        _scrape_provider_key,
         scrape_top_players_matches,
         scrape_top_players_extended_stats,
     )
@@ -242,6 +462,19 @@ def main(argv=None) -> int:
         if args.seed_players_only:
             logger.info("Seed-only mode: done.")
             return 0
+        backup_run_id, backup_rows = _backup_scraped_matches(
+            db,
+            tours=tours,
+            match_provider=provider_key,
+            top_n=top_n,
+            min_year=args.min_year,
+            max_matches_per_player=args.max_matches_per_player,
+        )
+        logger.info(
+            "Pre-run SCRAPED backup ready: run_id=%s rows=%d",
+            backup_run_id,
+            backup_rows,
+        )
         # Cloud mode is "live-only": we don't import the 1.7M-row Sackmann
         # historical CSVs into Turso (would take hours via HTTP).  Use local
         # mode for full archive queries; cloud mode = always-fresh top-N.
@@ -264,6 +497,12 @@ def main(argv=None) -> int:
             matches_df, rankings, scraped_names, match_report = scrape_result
             imported = 0
             if not matches_df.empty:
+                _guard_against_suspicious_drops(
+                    db,
+                    matches_df,
+                    scraped_names,
+                    scrape_provider=_scrape_provider_key(provider_key),
+                )
                 imported = db.import_scraped_matches(
                     matches_df, scraped_player_names=scraped_names,
                     replace_existing=False)

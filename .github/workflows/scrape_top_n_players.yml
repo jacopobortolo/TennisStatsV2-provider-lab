@@ -1,0 +1,128 @@
+name: Scrape Top N Players
+
+# Manual one-shot job: scrape the top N ranked players for one tour (or both)
+# and write directly to Turso. Useful for forcing a broader refresh without
+# waiting for the scheduled cloud scrape.
+
+on:
+  workflow_dispatch:
+    inputs:
+      top_n:
+        description: 'Top-N ranked players to refresh'
+        required: true
+        default: '100'
+      tour:
+        description: 'Tour'
+        required: true
+        default: 'atp'
+        type: choice
+        options:
+          - atp
+          - wta
+          - both
+      ignore_cache:
+        description: 'Ignore scrape cache and force all selected players to be fetched'
+        required: false
+        default: 'false'
+      no_extended:
+        description: 'Skip extended-stats scrape'
+        required: false
+        default: 'false'
+      min_year:
+        description: 'Drop scraped matches before this year (blank = cloud default)'
+        required: false
+        default: ''
+      max_matches_per_player:
+        description: 'Max recent matches to fetch per player (blank = cloud default)'
+        required: false
+        default: '20'
+      max_workers:
+        description: 'Max parallel match fetches (blank = provider default)'
+        required: false
+        default: ''
+      match_provider:
+        description: 'Live match provider'
+        required: true
+        default: 'tennisabstract'
+        type: choice
+        options:
+          - tennisabstract
+          - sofascore
+          - hybrid
+      purge_empty_scrape_cache:
+        description: 'Purge zero-row negative scrape-cache rows before running'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: tennis-topn-${{ github.event.inputs.tour }}-${{ github.event.inputs.top_n }}
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN:   ${{ secrets.TURSO_AUTH_TOKEN }}
+      TURSO_LOCAL_PATH:   ${{ github.workspace }}/replica.db
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cloud.txt
+
+      - name: Validate Turso secrets
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ] || [ -z "$TURSO_AUTH_TOKEN" ]; then
+            echo "::error::TURSO_DATABASE_URL and TURSO_AUTH_TOKEN secrets must be set"
+            exit 1
+          fi
+
+      - name: Scrape top ${{ github.event.inputs.top_n }} (${{ github.event.inputs.tour }})
+        run: |
+          EXTRA=""
+          if [ "${{ github.event.inputs.ignore_cache }}" = "true" ]; then
+            EXTRA="$EXTRA --ignore-cache"
+          fi
+          if [ "${{ github.event.inputs.no_extended }}" = "true" ]; then
+            EXTRA="$EXTRA --no-extended"
+          fi
+          if [ "${{ github.event.inputs.purge_empty_scrape_cache }}" = "true" ]; then
+            EXTRA="$EXTRA --purge-empty-scrape-cache"
+          fi
+          if [ -n "${{ github.event.inputs.min_year }}" ]; then
+            EXTRA="$EXTRA --min-year ${{ github.event.inputs.min_year }}"
+          fi
+          if [ -n "${{ github.event.inputs.max_matches_per_player }}" ]; then
+            EXTRA="$EXTRA --max-matches-per-player ${{ github.event.inputs.max_matches_per_player }}"
+          fi
+          if [ -n "${{ github.event.inputs.max_workers }}" ]; then
+            EXTRA="$EXTRA --max-workers ${{ github.event.inputs.max_workers }}"
+          fi
+          python -m cloud.scrape_job \
+            --top "${{ github.event.inputs.top_n }}" \
+            --tour "${{ github.event.inputs.tour }}" \
+            --match-provider "${{ github.event.inputs.match_provider }}" \
+            $EXTRA
+
+      - name: Upload replica snapshot (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: topn-replica-${{ github.run_id }}
+          path: replica.db
+          retention-days: 3
+          if-no-files-found: ignore
