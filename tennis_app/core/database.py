@@ -3029,6 +3029,67 @@ class TennisDatabase:
             ],
             keep="first",
         )
+        remote_incremental_preserve = (
+            not replace_existing and hasattr(self.conn, "_client")
+        )
+        if remote_incremental_preserve and scraped_players and not matches_df.empty:
+            from .match_providers import SofaScoreMatchProvider
+
+            ordered_players = []
+            seen_players = set()
+            for player_name in scraped_players:
+                text = str(player_name or "").strip()
+                if not text or text in seen_players:
+                    continue
+                seen_players.add(text)
+                ordered_players.append(text)
+
+            existing_scraped_keys = set()
+            chunk_size = 400  # 2x params below SQLite's usual 999 limit
+            for chunk_start in range(0, len(ordered_players), chunk_size):
+                chunk = ordered_players[chunk_start:chunk_start + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = self.conn.execute(
+                    f"""
+                    SELECT winner_name, loser_name, tour, tourney_date,
+                           tourney_name, round
+                    FROM matches
+                    WHERE tourney_id = 'SCRAPED'
+                      AND (winner_name IN ({placeholders})
+                           OR loser_name IN ({placeholders}))
+                    """,
+                    chunk + chunk,
+                ).fetchall()
+                for winner_name, loser_name, row_tour, tourney_date, \
+                        tourney_name, round_name in rows:
+                    existing_scraped_keys.add(
+                        SofaScoreMatchProvider.match_key(
+                            row_tour, tourney_date, winner_name, loser_name,
+                            tourney_name, round_name,
+                        )
+                    )
+
+            if existing_scraped_keys:
+                incoming_keys = [
+                    SofaScoreMatchProvider.match_key(
+                        row.get("tour"), row.get("tourney_date"),
+                        row.get("winner_name"), row.get("loser_name"),
+                        row.get("tourney_name"), row.get("round"),
+                    )
+                    for row in matches_df.to_dict("records")
+                ]
+                existing_mask = pd.Series(
+                    [key in existing_scraped_keys for key in incoming_keys],
+                    index=matches_df.index,
+                )
+                n_existing = int(existing_mask.sum())
+                if n_existing:
+                    logger.info(
+                        "Remote incremental import: pre-filtered %d exact "
+                        "SCRAPED duplicates before staging",
+                        n_existing,
+                    )
+                    matches_df = matches_df.loc[~existing_mask].copy()
 
         # Merge scraped providers match-by-match. TennisAbstract is the
         # preferred source: it replaces matching SofaScore rows, while
@@ -3057,9 +3118,6 @@ class TennisDatabase:
         )
         s_provider = (
             "LOWER(COALESCE(NULLIF(s.scrape_provider, ''), 'tennisabstract'))"
-        )
-        remote_incremental_preserve = (
-            not replace_existing and hasattr(self.conn, "_client")
         )
         try:
             matches_df.to_sql(staging_name, self.conn, if_exists="replace", index=False)
@@ -3293,21 +3351,6 @@ class TennisDatabase:
                     "Remote incremental import: preserving existing SCRAPED rows "
                     "to avoid delete-before-insert loss on network timeouts"
                 )
-                self.conn.execute(f"""
-                    DELETE FROM {staging_name}
-                    WHERE rowid IN (
-                        SELECT s.rowid
-                        FROM {staging_name} s
-                        JOIN matches m
-                          ON {match_key}
-                        WHERE m.tourney_id = 'SCRAPED'
-                          AND (
-                            ({m_provider}) = {s_provider}
-                            OR ({s_provider} = 'tennisabstract'
-                                AND ({m_provider}) = 'sofascore')
-                          )
-                    )
-                """)
             else:
                 self.conn.execute(f"""
                     DELETE FROM matches
@@ -3328,15 +3371,27 @@ class TennisDatabase:
                 f"SELECT COUNT(*) FROM {staging_name}").fetchone()
             new_count = count_row[0]
             if new_count > 0:
-                staging_cols = [
-                    row[1] for row in
-                    self.conn.execute(f"PRAGMA table_info({staging_name})").fetchall()
-                ]
+                staging_cols = list(matches_df.columns)
                 cols_csv = ", ".join(staging_cols)
-                self.conn.execute(f"""
-                    INSERT INTO matches ({cols_csv})
-                    SELECT {cols_csv} FROM {staging_name}
-                """)
+                if remote_incremental_preserve:
+                    staging_rows = self.conn.execute(
+                        f"SELECT {cols_csv} FROM {staging_name}"
+                    ).fetchall()
+                    insert_sql = (
+                        f"INSERT INTO matches ({cols_csv}) VALUES ("
+                        + ", ".join("?" for _ in staging_cols)
+                        + ")"
+                    )
+                    for chunk_start in range(0, len(staging_rows), 200):
+                        self.conn.executemany(
+                            insert_sql,
+                            staging_rows[chunk_start:chunk_start + 200],
+                        )
+                else:
+                    self.conn.execute(f"""
+                        INSERT INTO matches ({cols_csv})
+                        SELECT {cols_csv} FROM {staging_name}
+                    """)
                 logger.info("Imported %d new scraped matches", new_count)
             else:
                 logger.info("No new scraped matches to import")
