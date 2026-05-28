@@ -541,7 +541,6 @@ class MainWindow(QMainWindow):
             match_provider="sofascore",
             include_players=False,
             include_extended=False,
-            canonicalize_matches=False,
             progress_callback=lambda table, rows: progress_cb(
                 90, 100, f"Syncing {table} ({rows} rows)..."),
         )
