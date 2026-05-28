@@ -3029,12 +3029,51 @@ class TennisDatabase:
             ],
             keep="first",
         )
+
+        from .match_providers import SofaScoreMatchProvider
+
+        def _shadow_key(row):
+            date_text = str(row.get("source_match_date") or
+                            row.get("tourney_date") or "")
+            return (
+                str(row.get("tour") or "").strip().lower(),
+                date_text[:4],
+                SofaScoreMatchProvider._player_key(row.get("winner_name")),
+                SofaScoreMatchProvider._player_key(row.get("loser_name")),
+                SofaScoreMatchProvider._norm(str(row.get("tourney_name") or "")),
+                str(row.get("round") or "").strip().upper(),
+            )
+
+        if not matches_df.empty and "scrape_provider" in matches_df.columns:
+            provider_priority = {"tennisabstract": 0, "sofascore": 1}
+            shadow_keys = matches_df.apply(_shadow_key, axis=1)
+            priority = matches_df["scrape_provider"].map(
+                lambda provider: provider_priority.get(str(provider), 2)
+            )
+            tmp = matches_df.assign(
+                _provider_priority=priority,
+                _shadow_key=shadow_keys,
+            )
+            before_provider_shadow = len(tmp)
+            tmp = (
+                tmp.sort_values(["_shadow_key", "_provider_priority"])
+                .drop_duplicates(subset=["_shadow_key"], keep="first")
+            )
+            dropped_provider_shadow = before_provider_shadow - len(tmp)
+            if dropped_provider_shadow:
+                logger.info(
+                    "Dropped %d provider-shadow duplicate scraped matches "
+                    "before import",
+                    dropped_provider_shadow,
+                )
+            matches_df = tmp.drop(
+                columns=["_provider_priority", "_shadow_key"]
+            ).sort_index()
+
         remote_incremental_preserve = (
             not replace_existing and hasattr(self.conn, "_client")
         )
         if remote_incremental_preserve and scraped_players and not matches_df.empty:
-            from .match_providers import SofaScoreMatchProvider
-
             ordered_players = []
             seen_players = set()
             for player_name in scraped_players:
@@ -3045,6 +3084,7 @@ class TennisDatabase:
                 ordered_players.append(text)
 
             existing_scraped_keys = set()
+            existing_tennisabstract_shadow_keys = set()
             chunk_size = 400  # 2x params below SQLite's usual 999 limit
             for chunk_start in range(0, len(ordered_players), chunk_size):
                 chunk = ordered_players[chunk_start:chunk_start + chunk_size]
@@ -3052,7 +3092,8 @@ class TennisDatabase:
                 rows = self.conn.execute(
                     f"""
                     SELECT winner_name, loser_name, tour, tourney_date,
-                           tourney_name, round
+                           source_match_date, tourney_name, round,
+                           scrape_provider, winner_seed
                     FROM matches
                     WHERE tourney_id = 'SCRAPED'
                       AND (winner_name IN ({placeholders})
@@ -3061,13 +3102,32 @@ class TennisDatabase:
                     chunk + chunk,
                 ).fetchall()
                 for winner_name, loser_name, row_tour, tourney_date, \
-                        tourney_name, round_name in rows:
+                        source_match_date, tourney_name, round_name, \
+                        scrape_provider, winner_seed in rows:
                     existing_scraped_keys.add(
                         SofaScoreMatchProvider.match_key(
                             row_tour, tourney_date, winner_name, loser_name,
                             tourney_name, round_name,
                         )
                     )
+                    provider = str(scrape_provider or "").strip().lower()
+                    if not provider:
+                        provider = (
+                            "sofascore" if winner_seed is None
+                            else "tennisabstract"
+                        )
+                    if provider == "tennisabstract":
+                        existing_tennisabstract_shadow_keys.add(
+                            _shadow_key({
+                                "tour": row_tour,
+                                "source_match_date": source_match_date,
+                                "tourney_date": tourney_date,
+                                "winner_name": winner_name,
+                                "loser_name": loser_name,
+                                "tourney_name": tourney_name,
+                                "round": round_name,
+                            })
+                        )
 
             if existing_scraped_keys:
                 incoming_keys = [
@@ -3078,15 +3138,32 @@ class TennisDatabase:
                     )
                     for row in matches_df.to_dict("records")
                 ]
+                incoming_shadow_keys = [
+                    _shadow_key(row) for row in matches_df.to_dict("records")
+                ]
+                incoming_providers = [
+                    str(row.get("scrape_provider") or "").strip().lower()
+                    for row in matches_df.to_dict("records")
+                ]
                 existing_mask = pd.Series(
-                    [key in existing_scraped_keys for key in incoming_keys],
+                    [
+                        key in existing_scraped_keys
+                        or (
+                            provider == "sofascore"
+                            and shadow_key in existing_tennisabstract_shadow_keys
+                        )
+                        for key, shadow_key, provider in zip(
+                            incoming_keys, incoming_shadow_keys,
+                            incoming_providers,
+                        )
+                    ],
                     index=matches_df.index,
                 )
                 n_existing = int(existing_mask.sum())
                 if n_existing:
                     logger.info(
-                        "Remote incremental import: pre-filtered %d exact "
-                        "SCRAPED duplicates before staging",
+                        "Remote incremental import: pre-filtered %d exact or "
+                        "TennisAbstract-shadowed SCRAPED duplicates before staging",
                         n_existing,
                     )
                     matches_df = matches_df.loc[~existing_mask].copy()
