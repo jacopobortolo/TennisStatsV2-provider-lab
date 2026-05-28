@@ -3126,52 +3126,58 @@ class TennisDatabase:
             canonical_tourney_key = _tourney_name_sql_key("canonical.tourney_name")
             other_tourney_key = _tourney_name_sql_key("other.tourney_name")
             ta_tourney_key = _tourney_name_sql_key("ta.tourney_name")
-            self.conn.execute(f"""
-                UPDATE {staging_name} AS sf
-                SET surface = (
-                    SELECT MIN(ref.surface)
-                    FROM matches ref
-                    WHERE ref.tourney_id = 'SCRAPED'
-                      AND ref.scrape_provider = 'tennisabstract'
-                      AND ref.tour = sf.tour
-                      AND SUBSTR(ref.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
-                      AND {ref_sf_tourney_key} = {sf_tourney_key}
-                      AND COALESCE(ref.surface, '') != ''
+            if remote_incremental_preserve:
+                logger.info(
+                    "Remote incremental import: skipping correlated surface "
+                    "backfill on staging rows to avoid Turso timeouts"
                 )
-                WHERE sf.scrape_provider = 'sofascore'
-                  AND (
-                    SELECT COUNT(DISTINCT ref.surface)
-                    FROM matches ref
-                    WHERE ref.tourney_id = 'SCRAPED'
-                      AND ref.scrape_provider = 'tennisabstract'
-                      AND ref.tour = sf.tour
-                      AND SUBSTR(ref.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
-                      AND {ref_sf_tourney_key} = {sf_tourney_key}
-                      AND COALESCE(ref.surface, '') != ''
-                  ) = 1
-            """)
-            self.conn.execute(f"""
-                UPDATE {staging_name} AS sf
-                SET surface = (
-                    SELECT MIN(ref.surface)
-                    FROM matches ref
-                    WHERE ref.tourney_id = 'SCRAPED'
-                      AND ref.scrape_provider = 'tennisabstract'
-                      AND ref.tour = sf.tour
-                      AND {ref_sf_tourney_key} = {sf_tourney_key}
-                      AND COALESCE(ref.surface, '') != ''
-                )
-                WHERE sf.scrape_provider = 'sofascore'
-                  AND (
-                    SELECT COUNT(DISTINCT ref.surface)
-                    FROM matches ref
-                    WHERE ref.tourney_id = 'SCRAPED'
-                      AND ref.scrape_provider = 'tennisabstract'
-                      AND ref.tour = sf.tour
-                      AND {ref_sf_tourney_key} = {sf_tourney_key}
-                      AND COALESCE(ref.surface, '') != ''
-                  ) = 1
-            """)
+            else:
+                self.conn.execute(f"""
+                    UPDATE {staging_name} AS sf
+                    SET surface = (
+                        SELECT MIN(ref.surface)
+                        FROM matches ref
+                        WHERE ref.tourney_id = 'SCRAPED'
+                          AND ref.scrape_provider = 'tennisabstract'
+                          AND ref.tour = sf.tour
+                          AND SUBSTR(ref.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                          AND {ref_sf_tourney_key} = {sf_tourney_key}
+                          AND COALESCE(ref.surface, '') != ''
+                    )
+                    WHERE sf.scrape_provider = 'sofascore'
+                      AND (
+                        SELECT COUNT(DISTINCT ref.surface)
+                        FROM matches ref
+                        WHERE ref.tourney_id = 'SCRAPED'
+                          AND ref.scrape_provider = 'tennisabstract'
+                          AND ref.tour = sf.tour
+                          AND SUBSTR(ref.tourney_date, 1, 4) = SUBSTR(sf.tourney_date, 1, 4)
+                          AND {ref_sf_tourney_key} = {sf_tourney_key}
+                          AND COALESCE(ref.surface, '') != ''
+                      ) = 1
+                """)
+                self.conn.execute(f"""
+                    UPDATE {staging_name} AS sf
+                    SET surface = (
+                        SELECT MIN(ref.surface)
+                        FROM matches ref
+                        WHERE ref.tourney_id = 'SCRAPED'
+                          AND ref.scrape_provider = 'tennisabstract'
+                          AND ref.tour = sf.tour
+                          AND {ref_sf_tourney_key} = {sf_tourney_key}
+                          AND COALESCE(ref.surface, '') != ''
+                    )
+                    WHERE sf.scrape_provider = 'sofascore'
+                      AND (
+                        SELECT COUNT(DISTINCT ref.surface)
+                        FROM matches ref
+                        WHERE ref.tourney_id = 'SCRAPED'
+                          AND ref.scrape_provider = 'tennisabstract'
+                          AND ref.tour = sf.tour
+                          AND {ref_sf_tourney_key} = {sf_tourney_key}
+                          AND COALESCE(ref.surface, '') != ''
+                      ) = 1
+                """)
             self.conn.execute(f"""
                 DELETE FROM {staging_name}
                 WHERE rowid IN (
